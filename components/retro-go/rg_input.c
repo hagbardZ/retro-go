@@ -5,7 +5,7 @@
 #include <string.h>
 #include <math.h>
 
-// #define USE_ADC_DRIVER_NG
+#define USE_ADC_DRIVER_NG
 
 #ifdef ESP_PLATFORM
 #include <driver/gpio.h>

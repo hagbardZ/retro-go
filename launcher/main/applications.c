@@ -702,6 +702,7 @@ void applications_init(void)
     application("DOOM", "doom", "wad zip", "prboom-go", 0);
     application("Duke Nukem 3D", "duke3d", "grp", "duke3d-go", 0);
     application("MSX", "msx", "rom mx1 mx2 dsk", "fmsx", 0);
+    application("Tomb Raider", "openlara", "tr1", "openlara", 0);
 
     // Special app to bootstrap native esp32 binaries from the SD card
     // application("Bootstrap", "apps", "bin elf", "bootstrap", 0);
