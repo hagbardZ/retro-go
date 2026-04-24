@@ -72,7 +72,7 @@
 #define RG_SCREEN_SAFE_AREA         {0, 0, 0, 0}  // Left, Top, Right, Bottom
 #define RG_SCREEN_PARTIAL_UPDATES   1
 #define RG_SCREEN_INIT()                                                                                         \
-    /*ILI9341_CMD(0x21); IPS pannel needs no inversion ... 20260423 S.Beha*/                      /* Inversion */                                                     \
+    /*ILI9341_CMD(0x21); */ /*IPS pannel needs no inversion ... 20260423 S.Beha*/                      /* Inversion */                                                     \
     ILI9341_CMD(0xC0, 0x1B);                 /* Power control   //VRH[5:0] */                                    \
     ILI9341_CMD(0xC1, 0x12);                 /* Power control   //SAP[2:0];BT[3:0] */                            \
     ILI9341_CMD(0xC5, 0x32, 0x3C);           /* VCM control */                                                   \

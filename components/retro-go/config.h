@@ -14,6 +14,10 @@
 #include "targets/fri3d-2024/config.h"
 #elif defined(RG_TARGET_GB300_P4)
 #include "targets/gb300-p4/config.h"
+#elif defined(RG_TARGET_MARTENDO32_IPS)
+#include "targets/martendo32-ips/config.h"
+#elif defined(RG_TARGET_MARTENDO32)
+#include "targets/martendo32/config.h"
 #elif defined(RG_TARGET_MRGC_G32)
 #include "targets/mrgc-g32/config.h"
 #elif defined(RG_TARGET_MRGC_GBM)
