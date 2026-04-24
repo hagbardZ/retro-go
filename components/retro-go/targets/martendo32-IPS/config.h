@@ -1,5 +1,5 @@
  /****************************************************************************
- * Target definition for GB300-P4
+ * Target definition for Martendo32-IPS
  * Guide: https://github.com/hagbardZ/Martendo32
  * Command to build: python rg_tool.py --target martendo32-ips build-img --no-networking
  ****************************************************************************/

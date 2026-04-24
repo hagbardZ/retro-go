@@ -51,7 +51,7 @@
 #endif
 
 #ifndef RG_PROJECT_WEBSITE
-#define RG_PROJECT_WEBSITE "https://github.com/ducalex/retro-go"
+#define RG_PROJECT_WEBSITE "https://github.com/hagbardZ/Martendo32"
 #endif
 
 #ifndef RG_PROJECT_CREDITS
