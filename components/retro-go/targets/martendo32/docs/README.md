@@ -18,5 +18,4 @@ Command to build (ESP-IDF v5.5): `python rg_tool.py --target martendo32 build-im
 
 ## Images
 
-![GB300-P4.jpg](GB300-P4.jpg)
-![GB300-P4-back.jpg](GB300-P4-back.jpg)
+<img width="1718" height="1050" alt="Martendo32" src="https://github.com/user-attachments/assets/7c5d70eb-7909-46c6-8a48-3085a08f871d" />
