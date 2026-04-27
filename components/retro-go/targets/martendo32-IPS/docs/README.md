@@ -1,3 +1,4 @@
+
 # Martendo32-IPS
 - Build Guide & BOM: https://github.com/hagbardZ/Martendo32
 - Status: Complete
@@ -18,5 +19,5 @@ Command to build (ESP-IDF v5.5): `python rg_tool.py --target martendo32-IPS buil
 
 
 ## Images
-
+<img width="1718" height="1050" alt="Martendo32" src="https://github.com/user-attachments/assets/e1ad5767-983e-4a02-aa00-4a6fad012994" />
 
