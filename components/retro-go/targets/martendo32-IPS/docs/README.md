@@ -1,13 +1,14 @@
-# GB300-P4
-- Build Guide & BOM: [Instructables guide](https://www.instructables.com/GB300-P4-a-ESP32-P4-Based-Retro-Handheld-Using-the/)
+# Martendo32-IPS
+- Build Guide & BOM: https://github.com/hagbardZ/Martendo32
 - Status: Complete
 
-Command to build (ESP-IDF v5.5): `python rg_tool.py --target gb300-p4 build-img --no-networking`
+Command to build (ESP-IDF v5.5): `python rg_tool.py --target martendo32-IPS build-img --no-networking`
 
 ## Hardware
-- Sup+/Datafrog GB300 - Uses its shell, buttons, membranes, speaker, 18650 battery etc
+- Martendo32
 - Wireless-Tag ESP32-P4 WT0132P4-A1-N16R32
-- ST7789V 320*240 2.8" SPI Display - STP0280A2-240320
+- Display: https://de.aliexpress.com/item/1005005797273047.html?spm=a2g0o.order_list.order_list_main.23.4af05c5fI1S7JY&gatewayAdapt=glo2deu
+- ST7789V 320*240 2.8" SPI Display - IPS full view screen RGB565
 - SD card over SDMMC (4 bits)
 - NS4168 DAC
 - TP4056 charge chip
