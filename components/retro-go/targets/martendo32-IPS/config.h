@@ -1,7 +1,7 @@
  /****************************************************************************
  * Target definition for Martendo32-IPS
  * Guide: https://github.com/hagbardZ/Martendo32
- * Command to build: python rg_tool.py --target martendo32-ips build-img --no-networking
+ * Command to build: python rg_tool.py --target martendo32-IPS build-img --no-networking
  ****************************************************************************/
 #define RG_TARGET_NAME             "MARTENDO32-IPS"
 
