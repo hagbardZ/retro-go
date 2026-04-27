@@ -19,5 +19,4 @@ Command to build (ESP-IDF v5.5): `python rg_tool.py --target martendo32-IPS buil
 
 ## Images
 
-![GB300-P4.jpg](GB300-P4.jpg)
-![GB300-P4-back.jpg](GB300-P4-back.jpg)
+
