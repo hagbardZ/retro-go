@@ -706,9 +706,8 @@ void applications_init(void)
     application("Tomb Raider", "openlara", "tr1", "openlara", 0);
     application("Celeste", "celeste", "p8", "celeste", 0);
     application("Outrun", "cannonball", "ball", "cannonball", 0);
-
-    // Special app to bootstrap native esp32 binaries from the SD card
-    // application("Bootstrap", "apps", "bin elf", "bootstrap", 0);
+	// Special app to bootstrap native esp32 binaries from the SD card
+    application("Apps", "apps", "bin elf", "bootstrap", 0);
 
     if (rg_system_get_stats().freeMemory > 0x100000)
         crc_cache_init();
