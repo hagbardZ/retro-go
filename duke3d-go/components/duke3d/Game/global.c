@@ -38,6 +38,7 @@ Prepared for public release: 03/21/2003 - Charlie Wiederhold, 3D Realms
 #include "esp_attr.h"
 
 #include "SDL.h"
+#include <dirent.h>
 
 char  *mymembuf;
 EXT_RAM_BSS_ATTR uint8_t  MusicPtr[1];//72000
