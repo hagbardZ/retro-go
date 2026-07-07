@@ -14,10 +14,15 @@ _Note: As of retro-go 1.47, I use 5.1. I used 4.4 for 1.44 to 1.46, 4.3 for 1.35
 
 For Martendo32: use esp-idf v5.3.5 !!!
        python rg_tool.py --target martendo32 build-img --no-networking
+       
        python rg_tool.py --target martendo32-ips build-img --no-networking
+       
        or
+       
        python rg_tool.py --target martendo32 release --no-networking
+       
        python rg_tool.py --target martendo32-ips release --no-networking
+       
        
        
 ### ESP-IDF Patches
