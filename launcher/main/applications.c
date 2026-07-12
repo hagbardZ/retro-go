@@ -709,6 +709,7 @@ void applications_init(void)
 	// Special app to bootstrap native esp32 binaries from the SD card
     application("Apps", "apps", "bin elf", "bootstrap", 0);
     application("Classicube", "classicube", "sh", "classicube", 0);
+    application("Super Mario 64", "sm64", "z64 zip", "sm64-go", 0);
 
     if (rg_system_get_stats().freeMemory > 0x100000)
         crc_cache_init();

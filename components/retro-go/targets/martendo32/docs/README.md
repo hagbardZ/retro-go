@@ -2,7 +2,11 @@
 - Build Guide & BOM: https://github.com/hagbardZ/Martendo32
 - Status: Complete
 
-Command to build (ESP-IDF v5.5): `python rg_tool.py --target martendo32 build-img --no-networking`
+Command to build (ESP-IDF v5.3.5): `python rg_tool.py --target martendo32 build-img --no-networking`
+
+python rg_tool.py --target martendo32 build-img launcher snes9x retro-core gwenesis sm64-go --no-networking
+python rg_tool.py --target martendo32 release launcher snes9x retro-core gwenesis sm64-go --no-networking
+Flash size: 15.688 MB
 
 ## Hardware
 - Martendo32
