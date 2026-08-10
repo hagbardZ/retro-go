@@ -1102,7 +1102,7 @@ static bool draw_state(void)
     rg_gui_draw_text(RG_GUI_CENTER, 16, 0, buffer, C_WHITE, C_BLACK, RG_TEXT_ALIGN_CENTER);
     snprintf(buffer, sizeof(buffer), "Playback: %s", playing ? "Playing" : "Stopped");
     rg_gui_draw_text(RG_GUI_CENTER, 44, 0, buffer, C_WHITE, C_BLACK, RG_TEXT_ALIGN_CENTER);
-    snprintf(buffer, sizeof(buffer), "Audio: %dHz/%s", sample_rate, driver ?driver : "Unknown");
+    snprintf(buffer, sizeof(buffer), "Audio: %dHz/%s Vol: %d%%", sample_rate, driver ?driver : "Unknown", rg_audio_get_volume());
     rg_gui_draw_text(RG_GUI_CENTER, 72, 0, buffer, C_WHITE, C_BLACK, RG_TEXT_ALIGN_CENTER);
     draw_progress_bar(110);
     if (playlist_count > 0 && playlist_index >= 0)
@@ -1111,9 +1111,9 @@ static bool draw_state(void)
         snprintf(buffer, sizeof(buffer), "Track: -");
     rg_gui_draw_text(RG_GUI_CENTER, 138, 0, buffer, C_WHITE, C_BLACK, RG_TEXT_ALIGN_CENTER);
     snprintf(buffer, sizeof(buffer), "A=Play/Pause B=Repeat Y=Choose MENU=Exit");
-    rg_gui_draw_text(RG_GUI_CENTER, 166, 0, buffer, C_SILVER, C_BLACK, RG_TEXT_ALIGN_CENTER);
+    rg_gui_draw_text(RG_GUI_CENTER, 210, 0, buffer, C_SILVER, C_BLACK, RG_TEXT_ALIGN_CENTER);
     snprintf(buffer, sizeof(buffer), "UP/DOWN=Track L/R=Seek 5s X=Random");
-    rg_gui_draw_text(RG_GUI_CENTER, 186, 0, buffer, C_SILVER, C_BLACK, RG_TEXT_ALIGN_CENTER);
+    rg_gui_draw_text(RG_GUI_CENTER, 224, 0, buffer, C_SILVER, C_BLACK, RG_TEXT_ALIGN_CENTER);
     rg_gui_set_surface(NULL);
     rg_display_submit(surface, 0);
     return true;
