@@ -5,16 +5,14 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-// Duke3D stack usage peaked at ~36KB in testing. We use 48KB in Internal DRAM for ESP32.
-// S3/P4 use the original 144KB in PSRAM.
-#if CONFIG_IDF_TARGET_ESP32
+// Duke3D stack usage peaked at ~36KB in testing. Use 48KB in Internal DRAM.
+// Must use MEM_FAST (internal DRAM) so that SPI flash cache disable operations
+// work correctly when using LittleFS on internal storage (no SD card).
 #define DUKE_STACK_SIZE (48 * 1024)
-#else
-#define DUKE_STACK_SIZE (144 * 1024)
-#endif
+#define DUKE_ENGINE_CORE 0
 
 static TaskHandle_t duke_task_handle = NULL;
-// Flag to signal Core 0 that Core 1 has finished cleanup and is ready for reboot
+// Flag to signal app_main that the engine task has finished cleanup.
 volatile bool reboot_ready_flag = false;
 
 static void ensure_dir(const char *path)
@@ -29,7 +27,8 @@ static void ensure_dir(const char *path)
     
     // Skip the root / mount point
     char *start = tmp + 1;
-    if (strncmp(tmp, "/sd/", 4) == 0) start = tmp + 4;
+    if (strncmp(tmp, RG_STORAGE_ROOT "/", strlen(RG_STORAGE_ROOT "/")) == 0) 
+        start = tmp + strlen(RG_STORAGE_ROOT "/");
 
     for (p = start; *p; p++)
     {
@@ -94,11 +93,15 @@ const key_mapping_t keymap[] = {
 
 const size_t keymap_count = sizeof(keymap) / sizeof(keymap[0]);
 
+// Hotkey mappings
 const key_mapping_t shifted_keymap[] = {
-    {RG_KEY_UP,    SDL_SCANCODE_RETURN,      SDLK_RETURN,       RG_MODE_GAME}, // Use Inventory Item
-    {RG_KEY_DOWN,  SDL_SCANCODE_J,           SDLK_j,            RG_MODE_GAME}, // Jetpack
-    {RG_KEY_LEFT,  SDL_SCANCODE_LEFTBRACKET, SDLK_LEFTBRACKET,  RG_MODE_GAME}, // Previous Item
-    {RG_KEY_RIGHT, SDL_SCANCODE_RIGHTBRACKET,SDLK_RIGHTBRACKET, RG_MODE_GAME}, // Next Item
+    {RG_KEY_UP,    SDL_SCANCODE_RETURN,      SDLK_RETURN,       RG_MODE_GAME}, // Use Inventory Item (Up + Hotkey)
+    {RG_KEY_DOWN,  SDL_SCANCODE_J,           SDLK_j,            RG_MODE_GAME}, // Jetpack (Down + Hotkey)
+    {RG_KEY_LEFT,  SDL_SCANCODE_LEFTBRACKET, SDLK_LEFTBRACKET,  RG_MODE_GAME}, // Previous Item (Left + Hotkey)
+    {RG_KEY_RIGHT, SDL_SCANCODE_RIGHTBRACKET,SDLK_RIGHTBRACKET, RG_MODE_GAME}, // Next Item (Right + Hotkey)
+    {RG_KEY_B,     SDL_SCANCODE_END,         SDLK_END,          RG_MODE_GAME}, // Look Down (B + Hotkey)
+    {RG_KEY_X,     SDL_SCANCODE_HOME,        SDLK_HOME,         RG_MODE_GAME}, // Look Up (X + Hotkey)
+    {RG_KEY_OPTION,SDL_SCANCODE_HOME,        SDLK_HOME,         RG_MODE_GAME}, // Look Up (OPTION + Hotkey)
 };
 
 const size_t shifted_keymap_count = sizeof(shifted_keymap) / sizeof(shifted_keymap[0]);
@@ -109,13 +112,8 @@ void dukeTask(void *pvParameters)
 
     RG_LOGI("dukeTask: Starting main loop on Core %d with %dKB stack\n", 
            xPortGetCoreID(), DUKE_STACK_SIZE / 1024);
-#if CONFIG_IDF_TARGET_ESP32
-    char *argv[]={"duke3d", "/nm", NULL};
-    int argc = 2;
-#else
     char *argv[]={"duke3d", NULL};
     int argc = 1;
-#endif
     while (!rg_system_should_exit())
     {
         main(argc, argv);
@@ -126,10 +124,10 @@ void dukeTask(void *pvParameters)
     // Give some time for background tasks or final OS cleanup on this core
     vTaskDelay(pdMS_TO_TICKS(50));
 
-    // Signal Core 0 to perform the reboot
+    // Signal app_main to perform the reboot.
     reboot_ready_flag = true;
     
-    // We are done. Core 1 will now run the idle task.
+    // We are done. The engine core will now run its idle task.
     vTaskDelete(NULL);
 }
 
@@ -160,19 +158,19 @@ void app_main(void)
     };
 
     rg_system_init(&config);
+    // Keep Retro-Go's periodic STACK/HEAP/BUSY/FPS status line enabled.
+    rg_system_set_log_level(RG_LOG_DEBUG);
+    if (!rg_settings_exists(NS_APP, "DispScaling")) {
+        rg_display_set_scaling(RG_DISPLAY_SCALING_FULL);
+    }
 
     ensure_dir(RG_BASE_PATH_SAVES "/duke3d");
+    ensure_dir(RG_BASE_PATH_CONFIG);
 
     RG_LOGI("app_main: Spawning Duke3D task...");
     
     static StaticTask_t duke_task_buffer;
-    void *stack_ptr = NULL;
-
-#if CONFIG_IDF_TARGET_ESP32
-    stack_ptr = rg_alloc(DUKE_STACK_SIZE, MEM_FAST); // Force Internal DRAM
-#else
-    stack_ptr = rg_alloc(DUKE_STACK_SIZE, MEM_SLOW); // S3/P4 can stay in PSRAM
-#endif
+    void *stack_ptr = rg_alloc(DUKE_STACK_SIZE, MEM_FAST);
 
     if (!stack_ptr) {
         RG_LOGE("Failed to allocate %dKB stack!", DUKE_STACK_SIZE / 1024);
@@ -187,7 +185,7 @@ void app_main(void)
         5,                  /* Priority at which the task is created. */
         stack_ptr,          /* Stack buffer */
         &duke_task_buffer,  /* Task buffer */
-        1                   /* Core 1 for the engine */
+        DUKE_ENGINE_CORE    /* Keep the renderer off Retro-Go's Core 1 display task */
     );
 
     if (duke_task_handle == NULL) {

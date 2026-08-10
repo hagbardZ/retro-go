@@ -38,10 +38,17 @@ Prepared for public release: 03/21/2003 - Charlie Wiederhold, 3D Realms
 
 static const char* TAG = "menues";
 
+#define SAVE_THUMB_WIDTH 160
+#define SAVE_THUMB_HEIGHT 100
+#define SAVE_THUMB_IO_STRIDE SAVE_THUMB_HEIGHT
+#define SAVE_THUMB_IO_COUNT SAVE_THUMB_WIDTH
+#define SAVE_THUMB_PIXELS (SAVE_THUMB_WIDTH * SAVE_THUMB_HEIGHT)
+
 extern SDL_Surface *surface;
 extern short inputloc;
 extern int recfilep;
 extern uint8_t  vgacompatible;
+extern uint8_t  actor_tog;   // monster AI toggle: 0=on 1=invisible 2=frozen
 short probey=0,lastprobey=0,last_menu,globalskillsound=-1;
 short sh,onbar,buttonstat,deletespot;
 short last_zero,last_fifty,last_threehundred = 0;
@@ -163,11 +170,83 @@ void savetemp(char  *fn,uint8_t* daptr,int32_t dasiz)
 {
     int fp;
 
+    if (daptr == NULL || dasiz <= 0)
+    {
+        RG_LOGW("savetemp: skip writing '%s' (ptr=%p size=%" PRId32 ")\n",
+                fn ? fn : "(null)", daptr, dasiz);
+        return;
+    }
+
     fp = open(fn,O_WRONLY|O_CREAT|O_TRUNC|O_BINARY,S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP);
+
+    if (fp < 0)
+    {
+        RG_LOGW("savetemp: open failed for '%s'\n", fn ? fn : "(null)");
+        return;
+    }
 
     write(fp,(uint8_t  *)daptr,dasiz);
 
     close(fp);
+}
+
+static uint8_t ensure_save_thumb_tile(uint8_t clear_if_missing)
+{
+    uint8_t was_missing = 0;
+
+    tiles[MAXTILES-1].lock = 254;
+    if (tiles[MAXTILES-1].data == NULL)
+    {
+        was_missing = 1;
+        allocache(&tiles[MAXTILES-1].data, SAVE_THUMB_PIXELS, &tiles[MAXTILES-1].lock);
+        if (tiles[MAXTILES-1].data == NULL)
+        {
+            RG_LOGW("save-thumb: alloc failed (%d bytes)\n", SAVE_THUMB_PIXELS);
+            return 0;
+        }
+    }
+
+    tiles[MAXTILES-1].dim.width = SAVE_THUMB_WIDTH;
+    tiles[MAXTILES-1].dim.height = SAVE_THUMB_HEIGHT;
+    tiles[MAXTILES-1].animFlags = 0;
+
+    if (clear_if_missing && was_missing)
+        memset(tiles[MAXTILES-1].data, 255, SAVE_THUMB_PIXELS);
+
+    return 1;
+}
+
+uint8_t capture_savegame_thumbnail(void)
+{
+    int32_t x, y;
+
+    if (!ensure_save_thumb_tile(1))
+        return 0;
+
+    displayrooms(myconnectindex,65536);
+
+    if (!ensure_save_thumb_tile(0))
+        return 0;
+
+    if (frameplace != NULL)
+    {
+        uint8_t *dst = tiles[MAXTILES-1].data;
+        for (x = 0; x < SAVE_THUMB_WIDTH; x++)
+        {
+            const int32_t srcX = (x * (xdim - 1)) / (SAVE_THUMB_WIDTH - 1);
+            for (y = 0; y < SAVE_THUMB_HEIGHT; y++)
+            {
+                const int32_t srcY = (ydim - 1) - ((y * (ydim - 1)) / (SAVE_THUMB_HEIGHT - 1));
+                dst[x * SAVE_THUMB_HEIGHT + y] = *(frameplace + ylookup[srcY] + srcX);
+            }
+        }
+    }
+    else
+    {
+        memset(tiles[MAXTILES-1].data, 255, SAVE_THUMB_PIXELS);
+    }
+
+    return 1;
 }
 
 void getangplayers(short snum)
@@ -217,11 +296,29 @@ int loadpheader(uint8_t  spot,int32 *vn,int32 *ln,int32 *psk,int32 *nump)
          kdfread(ln,sizeof(int32),1,fil);
      kdfread(psk,sizeof(int32),1,fil);
 
-     if (tiles[MAXTILES-3].data == NULL)
-         allocache(&tiles[MAXTILES-3].data,160*100,&tiles[MAXTILES-3].lock);
-    tiles[MAXTILES-3].dim.width = 100;
-    tiles[MAXTILES-3].dim.height = 160;
-    kdfread(tiles[MAXTILES-3].data,160,100,fil);
+    if (tiles[MAXTILES-3].data == NULL)
+        allocache(&tiles[MAXTILES-3].data,160*100,&tiles[MAXTILES-3].lock);
+    tiles[MAXTILES-3].dim.width = SAVE_THUMB_WIDTH;
+    tiles[MAXTILES-3].dim.height = SAVE_THUMB_HEIGHT;
+    kdfread(tiles[MAXTILES-3].data,SAVE_THUMB_IO_STRIDE,SAVE_THUMB_IO_COUNT,fil);
+
+    if (tiles[MAXTILES-3].data != NULL)
+    {
+        tiles[MAXTILES-3].animFlags = 0;
+        if (tiles[MAXTILES-1].data == NULL)
+        {
+            tiles[MAXTILES-1].lock = 254;
+            allocache(&tiles[MAXTILES-1].data, SAVE_THUMB_PIXELS, &tiles[MAXTILES-1].lock);
+        }
+
+        if (tiles[MAXTILES-1].data != NULL)
+        {
+            copybufbyte(tiles[MAXTILES-3].data, tiles[MAXTILES-1].data, SAVE_THUMB_PIXELS);
+            tiles[MAXTILES-1].dim.width = SAVE_THUMB_WIDTH;
+            tiles[MAXTILES-1].dim.height = SAVE_THUMB_HEIGHT;
+        }
+    }
+
     kclose(fil);
     return(0);
 }
@@ -309,13 +406,23 @@ int loadplayer(int8_t spot)
          drawbackground();
          menutext(160,100,0,0,"LOADING...");
          nextpage();
-    }
+     }
 
      waitforeverybody();
 
          FX_StopAllSounds();
      clearsoundlocks();
          MUSIC_StopSong();
+
+     if(numplayers <= 1)
+     {
+         pub = NUMPAGES;
+         pus = NUMPAGES;
+         vscrn();
+         drawbackground();
+         menutext(160,100,0,0,"LOADING SAVED GAME...");
+         nextpage();
+     }
 
      if(numplayers > 1)
          kdfread(&buf,19,1,fil);
@@ -338,10 +445,27 @@ int loadplayer(int8_t spot)
      if (tiles[MAXTILES-3].data == NULL)
          allocache(&tiles[MAXTILES-3].data,160*100,&tiles[MAXTILES-3].lock);
     
-     tiles[MAXTILES-3].dim.width = 100;
-    tiles[MAXTILES-3].dim.height = 160;
+     tiles[MAXTILES-3].dim.width = SAVE_THUMB_WIDTH;
+    tiles[MAXTILES-3].dim.height = SAVE_THUMB_HEIGHT;
     
-     kdfread(tiles[MAXTILES-3].data,160,100,fil);
+     kdfread(tiles[MAXTILES-3].data,SAVE_THUMB_IO_STRIDE,SAVE_THUMB_IO_COUNT,fil);
+
+     if (tiles[MAXTILES-3].data != NULL)
+     {
+         tiles[MAXTILES-3].animFlags = 0;
+         if (tiles[MAXTILES-1].data == NULL)
+         {
+             tiles[MAXTILES-1].lock = 254;
+             allocache(&tiles[MAXTILES-1].data, SAVE_THUMB_PIXELS, &tiles[MAXTILES-1].lock);
+         }
+
+         if (tiles[MAXTILES-1].data != NULL)
+         {
+             copybufbyte(tiles[MAXTILES-3].data, tiles[MAXTILES-1].data, SAVE_THUMB_PIXELS);
+             tiles[MAXTILES-1].dim.width = SAVE_THUMB_WIDTH;
+             tiles[MAXTILES-1].dim.height = SAVE_THUMB_HEIGHT;
+         }
+     }
 
          kdfread(&numwalls,2,1,fil);
      kdfread(&wall[0],sizeof(walltype),MAXWALLS,fil);
@@ -573,6 +697,8 @@ int saveplayer(int8_t spot)
          FILE *fil;
      int32_t bv = BYTEVERSION;
 	 char  fullpathsavefilename[1024];
+     uint8_t *saveThumbData;
+     static uint8_t saveThumbFallback[SAVE_THUMB_PIXELS];
 
      if(spot < 0)
      {
@@ -621,6 +747,17 @@ int saveplayer(int8_t spot)
 
      ready2send = 0;
 
+     if (!capture_savegame_thumbnail())
+     {
+         RG_LOGW("saveplayer: capture failed, using fallback thumbnail\n");
+         if (!ensure_save_thumb_tile(1))
+             memset(saveThumbFallback, 255, SAVE_THUMB_PIXELS);
+     }
+
+     saveThumbData = tiles[MAXTILES-1].data;
+     if (saveThumbData == NULL)
+         saveThumbData = saveThumbFallback;
+
      dfwrite(&bv,4,1,fil);
      dfwrite(&ud.multimode,sizeof(ud.multimode),1,fil);
 
@@ -628,7 +765,7 @@ int saveplayer(int8_t spot)
          dfwrite(&ud.volume_number,sizeof(ud.volume_number),1,fil);
      dfwrite(&ud.level_number,sizeof(ud.level_number),1,fil);
          dfwrite(&ud.player_skill,sizeof(ud.player_skill),1,fil);
-     dfwrite(tiles[MAXTILES-1].data,160,100,fil);
+     dfwrite(saveThumbData,SAVE_THUMB_IO_STRIDE,SAVE_THUMB_IO_COUNT,fil);
 
          dfwrite(&numwalls,2,1,fil);
      dfwrite(&wall[0],sizeof(walltype),MAXWALLS,fil);
@@ -1706,6 +1843,158 @@ void menus(void)
 
             break;
 
+        // ---------------------------------------------------------------
+        // case 10100 — CHEATS menu
+        // Cheats are always visible but greyed out unless a game is active.
+        // Cheats requiring typed parameters (warp, skill) are not listed here.
+        // ---------------------------------------------------------------
+        case 10100:
+        {
+            static int selected_level[4] = { 0, 0, 0, 0 };
+            int max_levels[4];
+            for (int v = 0; v < 4; v++)
+            {
+                int nl = 0;
+                while (nl < 11 && level_file_names[v * 11 + nl][0] != '\0')
+                {
+                    nl++;
+                }
+                if (nl == 0)
+                {
+                    // Fallback to standard counts
+                    if (v == 0) nl = 6;
+                    else nl = 11;
+                }
+                // Episode 1 always contains exactly 6 playable levels else it shows shareware messages as levels.
+                if (v == 0)
+                {
+                    nl = 6;
+                }
+                max_levels[v] = nl;
+            }
+
+            // cheat_id == -1 means "warp to episode/level", -2 means custom warp toggle
+            static const struct {
+                int        cheat_id;  // cheatquotes[] index, or -1 for warp, -2 for custom warp
+                int8_t     vol;       // 0-based volume (warp entries only)
+                int8_t     level;     // 0-based level  (warp entries only)
+                const char *label;
+            } cheat_entries[] = {
+                {  0, 0, 0, "GOD MODE"        },  // cornholio
+                { 20, 0, 0, "NO-CLIP"         },  // clip
+                {  1, 0, 0, "ALL STUFF"       },  // stuff
+             // { 17, 0, 0, "SHOW FULL MAP"   },  // showmap — temporarily hidden
+                { 13, 0, 0, "MONSTERS"        },  // monsters
+                { -2, 0, 0, "EPISODE 1"       },  // episode 1 toggle
+                { -2, 1, 0, "EPISODE 2"       },  // episode 2 toggle
+                { -2, 2, 0, "EPISODE 3"       },  // episode 3 toggle
+                { -2, 3, 0, "EPISODE 4"       },  // episode 4 toggle
+            };
+
+            int num_cheat_entries = 5; // God, Noclip, Stuff, Monsters, Episode 1
+            if (grpVersion == REGULAR_GRP13D)
+            {
+                num_cheat_entries = 7; // Ep 1, 2, 3
+            }
+            else if (grpVersion == ATOMIC_GRP14_15 || grpVersion == DUKEITOUTINDC_GRP)
+            {
+                num_cheat_entries = 8; // Ep 1, 2, 3, 4
+            }
+            else if (!VOLUMEONE)
+            {
+                num_cheat_entries = 7; // Fallback
+            }
+
+            int ingame = (ps[myconnectindex].gm & MODE_GAME) != 0;
+
+            c = (320>>1)-120;
+            rotatesprite(320<<15,19<<16,65536L,0,MENUBAR,16,0,10,0,0,xdim-1,ydim-1);
+            menutext(320>>1,24,0,0,"CHEATS");
+
+            onbar = (probey >= 4 && probey < num_cheat_entries);
+
+            x = probe(c+6,43,16,num_cheat_entries);
+
+            if(x == -1)
+            {
+                onbar = 0;
+                cmenu(702);
+                probey = 7;  // keep cursor on CHEATS in GAME OPTIONS
+                break;
+            }
+
+            // Activate selected cheat (only when a game is in progress)
+            if(x >= 0 && ingame)
+            {
+                if(cheat_entries[x].cheat_id == -1)
+                {
+                    // Warp: set volume/level and restart
+                    ud.m_volume_number = ud.volume_number = cheat_entries[x].vol;
+                    ud.m_level_number  = ud.level_number  = cheat_entries[x].level;
+                    ps[myconnectindex].gm |= MODE_RESTART;
+                }
+                else if(cheat_entries[x].cheat_id == -2)
+                {
+                    int v = cheat_entries[x].vol;
+                    if (KB_KeyPressed(sc_LeftArrow) || KB_KeyPressed(sc_kpad_4))
+                    {
+                        KB_ClearKeyDown(sc_LeftArrow);
+                        KB_ClearKeyDown(sc_kpad_4);
+                        selected_level[v] = (selected_level[v] + max_levels[v] - 1) % max_levels[v];
+                        sound(KICK_HIT);
+                    }
+                    else if (KB_KeyPressed(sc_RightArrow) || KB_KeyPressed(sc_kpad_6))
+                    {
+                        KB_ClearKeyDown(sc_RightArrow);
+                        KB_ClearKeyDown(sc_kpad_6);
+                        selected_level[v] = (selected_level[v] + 1) % max_levels[v];
+                        sound(KICK_HIT);
+                    }
+                    else
+                    {
+                        // ENTER/SPACE or mouse click -> Warp!
+                        ud.m_volume_number = ud.volume_number = v;
+                        ud.m_level_number  = ud.level_number  = selected_level[v];
+                        ps[myconnectindex].gm |= MODE_RESTART;
+                    }
+                }
+                else
+                    activate_cheat(cheat_entries[x].cheat_id);
+            }
+
+            // Draw all labels; grey them out when not in-game
+            for(int ci = 0; ci < num_cheat_entries; ci++)
+            {
+                int grey = ingame ? 0 : 1;
+                menutext(c, 43+16*ci, 0, grey, (char*)cheat_entries[ci].label);
+            }
+
+            // Show current state for the toggle cheats
+            if(ud.god)        menutext(c+200, 43+16*0, 0, 0, "ON");
+            else              menutext(c+200, 43+16*0, 0, 0, "OFF");
+            // row 1: noclip
+            if(ud.clipping)   menutext(c+200, 43+16*1, 0, 0, "ON");
+            else              menutext(c+200, 43+16*1, 0, 0, "OFF");
+         // row 3: show map — hidden, keep state display commented out too
+         // if(ud.showallmap) menutext(c+200, 43+16*3, 0, 0, "ON");
+         // else              menutext(c+200, 43+16*3, 0, 0, "OFF");
+            // row 3: monsters — 0=ON 1=OFF (invisible)
+            if(actor_tog) menutext(c+200, 43+16*3, 0, 0, "OFF");
+            else          menutext(c+200, 43+16*3, 0, 0, "ON");
+
+            // Episode toggle displays (rows 4 to num_cheat_entries - 1)
+            for (int ci = 4; ci < num_cheat_entries; ci++)
+            {
+                int v = cheat_entries[ci].vol;
+                int grey = ingame ? 0 : 1;
+                char lvl_label[32];
+                snprintf(lvl_label, sizeof(lvl_label), "E%dL%d", v + 1, selected_level[v] + 1);
+                menutext(c+200, 43+16*ci, 0, grey, lvl_label);
+            }
+
+            break;
+        }
+
         case 1000:
         case 1001:
         case 1002:
@@ -1720,7 +2009,7 @@ void menus(void)
             rotatesprite(160<<16,200<<15,65536L,0,MENUSCREEN,16,0,10+64,0,0,xdim-1,ydim-1);
             rotatesprite(160<<16,19<<16,65536L,0,MENUBAR,16,0,10,0,0,xdim-1,ydim-1);
             menutext(160,24,0,0,"LOAD GAME");
-            rotatesprite(101<<16,97<<16,65536,512,MAXTILES-3,-32,0,4+10+64,0,0,xdim-1,ydim-1);
+            rotatesprite(101<<16,97<<16,65536,0,MAXTILES-3,-32,0,4+10+64,0,0,xdim-1,ydim-1);
 
             dispnames();
 
@@ -1859,7 +2148,7 @@ void menus(void)
             rotatesprite(160<<16,19<<16,65536L,0,MENUBAR,16,0,10,0,0,xdim-1,ydim-1);
             menutext(160,24,0,0,"SAVE GAME");
 
-            rotatesprite(101<<16,97<<16,65536L,512,MAXTILES-3,-32,0,4+10+64,0,0,xdim-1,ydim-1);
+            rotatesprite(101<<16,97<<16,65536L,0,MAXTILES-3,-32,0,4+10+64,0,0,xdim-1,ydim-1);
             sprintf(text,"PLAYERS: %-2"PRId32"                      ", (int32_t)ud.multimode);
             gametext(160,158,text,0,2+8+16);
 
@@ -2486,13 +2775,8 @@ else
 					}
 					break;
 
-                case 5: // record on/off
-                    if( (ps[myconnectindex].gm&MODE_GAME) )
-                    {
-                        closedemowrite();
-                        break;
-                    }
-                    ud.m_recstat = !ud.m_recstat;
+                case 5: // Retro-Go Submenu
+                    cmenu(707);
                     break;
 
 				//case -7:
@@ -2511,6 +2795,9 @@ else
 
             menutext(c,43+16+16+16+16,SHX(-8),PHX(-8),"SETUP VIDEO");
 
+            menutext(c,43+16+16+16+16+16,SHX(-10),PHX(-10),"RETRO-GO OPTIONS");
+
+            /* Original Record logic (kept for future reference)
             if( (ps[myconnectindex].gm&MODE_GAME) && ud.m_recstat != 1 )
             {
                 menutext(c,43+16+16+16+16+16,SHX(-10),1,"RECORD");
@@ -2524,6 +2811,7 @@ else
                     menutext(c+160+40,43+16+16+16+16+16,SHX(-10),PHX(-10),"ON");
                 else menutext(c+160+40,43+16+16+16+16+16,SHX(-10),PHX(-10),"OFF");
             }
+            */
 
             break;
 
@@ -2780,13 +3068,13 @@ else
 
             onbar = 0;
 
-			x = probe(c+6,43,16,7);
+		x = probe(c+6,43,16,8);
 
             switch(x)
             {
 
                 case -1:
-					cmenu(200); 
+				cmenu(200); 
                     break;
 
                 case 0:
@@ -2795,31 +3083,34 @@ else
                 case 1:
                     ud.screen_tilting = 1-ud.screen_tilting;
                     break;
-				case 2:
-					ud.showcinematics = !ud.showcinematics;
-					break;
-				case 3:
-					ud.hideweapon = !ud.hideweapon;
-					vscrn(); // FIX_00056: Refresh issue w/FPS, small Weapon and custom FTA, when screen resized down
-					break;
-				case 4:
-					ud.weaponautoswitch = !ud.weaponautoswitch;
-					break;
-				case 5:
-					// FIX_00045: Autoaim mode can now be toggled on/off from menu
-					if( nHostForceDisableAutoaim == 0)
-					{
-						ud.auto_aim++;
-						ud.auto_aim = ((ud.auto_aim-1)%2)+1; // 2 = normal = full; 1 = bullet only
-					}					
-					break;
+			case 2:
+				ud.showcinematics = !ud.showcinematics;
+				break;
+			case 3:
+				ud.hideweapon = !ud.hideweapon;
+				vscrn(); // FIX_00056: Refresh issue w/FPS, small Weapon and custom FTA, when screen resized down
+				break;
+			case 4:
+				ud.weaponautoswitch = !ud.weaponautoswitch;
+				break;
+			case 5:
+				// FIX_00045: Autoaim mode can now be toggled on/off from menu
+				if( nHostForceDisableAutoaim == 0)
+				{
+					ud.auto_aim++;
+					ud.auto_aim = ((ud.auto_aim-1)%2)+1; // 2 = normal = full; 1 = bullet only
+				}					
+				break;
                 case 6: // parental
 #ifndef AUSTRALIA
                     cmenu(10000); 
 #endif
                     break;
+                case 7: // cheats
+                    cmenu(10100);
+                    break;
 
-			}
+		}
 
 
 			menutext(c,43+16*0,SHX(-3),PHX(-3),"SHADOWS");
@@ -2861,9 +3152,9 @@ else
 #else
             menutext(c,43+16*6,SHX(-9),1,"PARENTAL LOCK");
 #endif
+            menutext(c,43+16*7,SHX(-10),PHX(-10),"CHEATS");
 
-
-			break;
+		break;
 
         case 703:
 
@@ -3282,12 +3573,231 @@ else
 
 			break;
 
+        case 707: // Retro-Go Submenu
+        {
+            c = (320>>1)-120;
+            rotatesprite(320<<15,19<<16,65536L,0,MENUBAR,16,0,10,0,0,xdim-1,ydim-1);
+            menutext(320>>1,24,0,0,"RETRO-GO OPTIONS");
+
+            onbar = (probey == 0 || probey == 1);
+
+            x = probe(c+6,43,16,5);
+
+            static short retrogo_backlight_cached = -1;
+            static short retrogo_volume_cached = -1;
+            static short retrogo_audiosink_cached = -1;
+            static short retrogo_scaling_cached = -1;
+            static short retrogo_overclock_cached = -1;
+
+            size_t sinks_count = 0;
+            const rg_audio_sink_t *sinks = rg_audio_get_sinks(&sinks_count);
+
+            switch(x)
+            {
+                case -1:
+                    cmenu(200);
+                    probey = 5;
+                    retrogo_backlight_cached = -1; // clear cache on exit
+                    retrogo_volume_cached = -1;
+                    retrogo_audiosink_cached = -1;
+                    retrogo_scaling_cached = -1;
+                    retrogo_overclock_cached = -1;
+                    rg_settings_commit();
+                    break;
+
+                case 2: // Toggle Audio Driver
+                    if (sinks_count > 1)
+                    {
+                        SDL_PauseAudio(1);
+                        vTaskDelay(pdMS_TO_TICKS(50));
+                        retrogo_audiosink_cached = (retrogo_audiosink_cached + 1) % sinks_count;
+                        rg_audio_set_sink(sinks[retrogo_audiosink_cached].driver->name, sinks[retrogo_audiosink_cached].device);
+                        set_overclock_safe(retrogo_overclock_cached);
+                        SDL_PauseAudio(0);
+                    }
+                    sound(PISTOL_BODYHIT);
+                    break;
+
+                case -4: // cursor idle on Audio Driver
+                    if (KB_KeyPressed(sc_kpad_4) || KB_KeyPressed(sc_LeftArrow))
+                    {
+                        if (sinks_count > 1)
+                        {
+                            SDL_PauseAudio(1);
+                            vTaskDelay(pdMS_TO_TICKS(50));
+                            retrogo_audiosink_cached = (retrogo_audiosink_cached + sinks_count - 1) % sinks_count;
+                            rg_audio_set_sink(sinks[retrogo_audiosink_cached].driver->name, sinks[retrogo_audiosink_cached].device);
+                            set_overclock_safe(retrogo_overclock_cached);
+                            SDL_PauseAudio(0);
+                        }
+                        KB_ClearKeyDown(sc_kpad_4);
+                        KB_ClearKeyDown(sc_LeftArrow);
+                        sound(PISTOL_BODYHIT);
+                    }
+                    else if (KB_KeyPressed(sc_kpad_6) || KB_KeyPressed(sc_RightArrow))
+                    {
+                        if (sinks_count > 1)
+                        {
+                            SDL_PauseAudio(1);
+                            vTaskDelay(pdMS_TO_TICKS(50));
+                            retrogo_audiosink_cached = (retrogo_audiosink_cached + 1) % sinks_count;
+                            rg_audio_set_sink(sinks[retrogo_audiosink_cached].driver->name, sinks[retrogo_audiosink_cached].device);
+                            set_overclock_safe(retrogo_overclock_cached);
+                            SDL_PauseAudio(0);
+                        }
+                        KB_ClearKeyDown(sc_kpad_6);
+                        KB_ClearKeyDown(sc_RightArrow);
+                        sound(PISTOL_BODYHIT);
+                    }
+                    break;
+
+                case 3: // Toggle Scaling
+                    retrogo_scaling_cached = (retrogo_scaling_cached + 1) % 4; // Cycle OFF, FIT, FULL, ZOOM
+                    rg_display_set_scaling((display_scaling_t)retrogo_scaling_cached);
+                    sound(PISTOL_BODYHIT);
+                    break;
+
+                case -5: // cursor idle on Scaling
+                    if (KB_KeyPressed(sc_kpad_4) || KB_KeyPressed(sc_LeftArrow))
+                    {
+                        retrogo_scaling_cached = (retrogo_scaling_cached + 3) % 4;
+                        rg_display_set_scaling((display_scaling_t)retrogo_scaling_cached);
+                        KB_ClearKeyDown(sc_kpad_4);
+                        KB_ClearKeyDown(sc_LeftArrow);
+                        sound(PISTOL_BODYHIT);
+                    }
+                    else if (KB_KeyPressed(sc_kpad_6) || KB_KeyPressed(sc_RightArrow))
+                    {
+                        retrogo_scaling_cached = (retrogo_scaling_cached + 1) % 4;
+                        rg_display_set_scaling((display_scaling_t)retrogo_scaling_cached);
+                        KB_ClearKeyDown(sc_kpad_6);
+                        KB_ClearKeyDown(sc_RightArrow);
+                        sound(PISTOL_BODYHIT);
+                    }
+                    break;
+
+                case 4: // Toggle Overclock
+                    retrogo_overclock_cached = (retrogo_overclock_cached + 1) % 4; // Cycle OFF, LOW, MEDIUM, HIGH
+                    set_overclock_safe(retrogo_overclock_cached);
+                    sound(PISTOL_BODYHIT);
+                    break;
+
+                case -6: // cursor idle on Overclock
+                    if (KB_KeyPressed(sc_kpad_4) || KB_KeyPressed(sc_LeftArrow))
+                    {
+                        retrogo_overclock_cached = (retrogo_overclock_cached + 3) % 4;
+                        set_overclock_safe(retrogo_overclock_cached);
+                        KB_ClearKeyDown(sc_kpad_4);
+                        KB_ClearKeyDown(sc_LeftArrow);
+                        sound(PISTOL_BODYHIT);
+                    }
+                    else if (KB_KeyPressed(sc_kpad_6) || KB_KeyPressed(sc_RightArrow))
+                    {
+                        retrogo_overclock_cached = (retrogo_overclock_cached + 1) % 4;
+                        set_overclock_safe(retrogo_overclock_cached);
+                        KB_ClearKeyDown(sc_kpad_6);
+                        KB_ClearKeyDown(sc_RightArrow);
+                        sound(PISTOL_BODYHIT);
+                    }
+                    break;
+            }
+
+            menutext(c,43,SHX(-2),PHX(-2),"BACKLIGHT");
+
+            if (retrogo_backlight_cached == -1)
+            {
+                retrogo_backlight_cached = (rg_display_get_backlight() * 63) / 100;
+            }
+
+            short prev_backlight = retrogo_backlight_cached;
+            bar(c+167+40,43,&retrogo_backlight_cached,4,x==0,SHX(-2),PHX(-2));
+
+            if (retrogo_backlight_cached != prev_backlight)
+            {
+                rg_display_set_backlight((retrogo_backlight_cached * 100) / 63);
+            }
+
+            menutext(c,43+16,SHX(-3),PHX(-3),"VOLUME");
+
+            if (retrogo_volume_cached == -1)
+            {
+                retrogo_volume_cached = (rg_audio_get_volume() * 63) / 100;
+            }
+
+            short prev_volume = retrogo_volume_cached;
+            bar(c+167+40,43+16,&retrogo_volume_cached,4,x==1,SHX(-3),PHX(-3));
+
+            if (retrogo_volume_cached != prev_volume)
+            {
+                rg_audio_set_volume((retrogo_volume_cached * 100) / 63);
+            }
+
+            menutext(c,43+16+16,SHX(-4),PHX(-4),"AUDIO DRIVER");
+
+            if (retrogo_audiosink_cached == -1)
+            {
+                const rg_audio_sink_t *current_sink = rg_audio_get_sink();
+                retrogo_audiosink_cached = 0;
+                for (size_t i = 0; i < sinks_count; i++)
+                {
+                    if (sinks[i].device == current_sink->device && strcmp(sinks[i].driver->name, current_sink->driver->name) == 0)
+                    {
+                        retrogo_audiosink_cached = i;
+                        break;
+                    }
+                }
+            }
+
+            const char *sink_text = "UNKNOWN";
+            if (retrogo_audiosink_cached >= 0 && retrogo_audiosink_cached < sinks_count)
+            {
+                sink_text = sinks[retrogo_audiosink_cached].name;
+            }
+            menutext(c+160+40,43+16+16,0,0,(char *)sink_text);
+
+            menutext(c,43+16+16+16,SHX(-5),PHX(-5),"SCALING");
+
+            if (retrogo_scaling_cached == -1)
+            {
+                retrogo_scaling_cached = rg_display_get_scaling();
+            }
+
+            const char *scaling_text = "UNKNOWN";
+            switch(retrogo_scaling_cached)
+            {
+                case RG_DISPLAY_SCALING_OFF:  scaling_text = "OFF"; break;
+                case RG_DISPLAY_SCALING_FIT:  scaling_text = "FIT"; break;
+                case RG_DISPLAY_SCALING_FULL: scaling_text = "FULL"; break;
+                case RG_DISPLAY_SCALING_ZOOM: scaling_text = "ZOOM"; break;
+            }
+            menutext(c+160+40,43+16+16+16,0,0,(char *)scaling_text);
+
+            menutext(c,43+16+16+16+16,SHX(-6),PHX(-6),"OVERCLOCK");
+
+            if (retrogo_overclock_cached == -1)
+            {
+                retrogo_overclock_cached = rg_system_get_overclock();
+                if (retrogo_overclock_cached < 0 || retrogo_overclock_cached > 3)
+                {
+                    retrogo_overclock_cached = 0;
+                }
+            }
+
+            const char *overclock_text = "UNKNOWN";
+            switch(retrogo_overclock_cached)
+            {
+                case 0: overclock_text = "OFF"; break;
+                case 1: overclock_text = "LOW"; break;
+                case 2: overclock_text = "MEDIUM"; break;
+                case 3: overclock_text = "HIGH"; break;
+            }
+            menutext(c+160+40,43+16+16+16+16,0,0,(char *)overclock_text);
+            break;
+        }
+
         case 350:
             cmenu(351);
-            screencapt = 1;
-            displayrooms(myconnectindex,65536);
-            savetemp("duke3d.tmp",tiles[MAXTILES-1].data,160*100);
-            screencapt = 0;
+            capture_savegame_thumbnail();
             break;
 
         case 360:
@@ -3365,7 +3875,7 @@ else
                     sound(EXITMENUSOUND);
                 }
 
-                rotatesprite(101<<16,97<<16,65536,512,MAXTILES-1,-32,0,2+4+8+64,0,0,xdim-1,ydim-1);
+                rotatesprite(101<<16,97<<16,65536,0,MAXTILES-1,-32,0,2+4+8+64,0,0,xdim-1,ydim-1);
                 dispnames();
                 rotatesprite((c+67+strlen(&ud.savegame[current_menu-360][0])*4)<<16,(50+12*probey)<<16,32768L-10240,0,SPINNINGNUKEICON+(((totalclock)>>3)%7),0,0,10,0,0,xdim-1,ydim-1);
                 break;
@@ -3379,13 +3889,13 @@ else
           {
               if( ud.savegame[probey][0] )
               {
-                  if( lastprobey != probey )
-                  {
-                     loadpheader(probey,&volnum,&levnum,&plrskl,&numplr);
-                     lastprobey = probey;
-                  }
+                   if( lastprobey != probey )
+                   {
+                      loadpheader(probey,&volnum,&levnum,&plrskl,&numplr);
+                      lastprobey = probey;
+                   }
 
-                  rotatesprite(101<<16,97<<16,65536L,512,MAXTILES-3,-32,0,4+10+64,0,0,xdim-1,ydim-1);
+                  rotatesprite(101<<16,97<<16,65536L,0,MAXTILES-3,-32,0,4+10+64,0,0,xdim-1,ydim-1);
                   sprintf(text,"PLAYERS: %-2"PRId32"                      ", (int32_t)numplr);
                   gametext(160,158,text,0,2+8+16);
                   sprintf(text,"EPISODE: %-2"PRId32" / LEVEL: %-2"PRId32" / SKILL: %-2"PRId32, (int32_t)(1+volnum), (int32_t)(1+levnum), (int32_t)plrskl);
@@ -3400,7 +3910,7 @@ else
                   if(lastprobey != probey)
                       loadpheader(probey,&volnum,&levnum,&plrskl,&numplr);
                   lastprobey = probey;
-                  rotatesprite(101<<16,97<<16,65536L,512,MAXTILES-3,-32,0,4+10+64,0,0,xdim-1,ydim-1);
+                  rotatesprite(101<<16,97<<16,65536L,0,MAXTILES-3,-32,0,4+10+64,0,0,xdim-1,ydim-1);
               }
               else menutext(69,70,0,0,"Save");
               sprintf(text,"PLAYERS: %-2"PRId32"                      ", (int32_t)ud.multimode);
@@ -4680,6 +5190,12 @@ void playanm(char  *fn,uint8_t  t)
 
     length = kfilelength(handle);
 
+    if (length + (int32_t)sizeof(anim_t) > cachesize) {
+        printf("playanm: Skipping %s, too large for cache (%d > %d)\n", fn, (int)(length + sizeof(anim_t)), (int)cachesize);
+        kclose(handle);
+        return;
+    }
+
     tiles[MAXTILES-3-t].lock = 219+t;
 
     if(anim == 0 || lastanimhack != (MAXTILES-3-t)) {
@@ -4763,4 +5279,3 @@ ESP_LOGV(TAG, "ANIM_FreeAnim");
     ANIM_FreeAnim ();
     tiles[MAXTILES-3-t].lock = 1;
 }
-

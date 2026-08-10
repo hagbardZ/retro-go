@@ -1868,8 +1868,22 @@ void getinput(short snum)
         return;
     }
 
-    loc.bits =   ACTION(gamefunc_Jump);
-    loc.bits |=   ACTION(gamefunc_Crouch)<<1;
+    int jump_pressed = ACTION(gamefunc_Jump);
+    int crouch_pressed = ACTION(gamefunc_Crouch);
+
+    if (p->jetpack_on || (p->cursectnum >= 0 && (sector[p->cursectnum].lotag == 2 || sector[p->cursectnum].lotag == 1))) {
+        // Active Swim/Fly state: Invert directions
+        // Crouch action -> Swim Up / Fly Up (Bit 0)
+        // Jump action -> Swim Down / Fly Down (Bit 1)
+        loc.bits = crouch_pressed;
+        loc.bits |= jump_pressed << 1;
+    } else {
+        // Standard state (Ground / Air Jump / Crouch-Jumping): Keep defaults
+        // Jump action -> Jump (Bit 0)
+        // Crouch action -> Crouch (Bit 1)
+        loc.bits = jump_pressed;
+        loc.bits |= crouch_pressed << 1;
+    }
     loc.bits |=   ACTION(gamefunc_Fire)<<2;
     loc.bits |=   ACTION(gamefunc_Aim_Up)<<3;
     loc.bits |=   ACTION(gamefunc_Aim_Down)<<4;
@@ -4088,8 +4102,10 @@ static int32_t fdmatrix[12][12] =
 static int32_t goalx[MAXPLAYERS], goaly[MAXPLAYERS], goalz[MAXPLAYERS];
 static int32_t goalsect[MAXPLAYERS], goalwall[MAXPLAYERS], goalsprite[MAXPLAYERS];
 static int32_t goalplayer[MAXPLAYERS], clipmovecount[MAXPLAYERS];
-short searchsect[MAXSECTORS], searchparent[MAXSECTORS];
-uint8_t  dashow2dsector[(MAXSECTORS+7)>>3];
+// Bot pathfinding scratch is cold during normal single-player/demo play.  Keep
+// it out of scarce internal RAM now that the full sector capacity is enabled.
+EXT_RAM_BSS_ATTR short searchsect[MAXSECTORS], searchparent[MAXSECTORS];
+EXT_RAM_BSS_ATTR uint8_t dashow2dsector[(MAXSECTORS+7)>>3];
 void computergetinput(int32_t snum, input *syn)
 {
     int32_t i, j, k, l, x1, y1, z1, x2, y2, z2, x3, y3, z3, dx, dy;
@@ -4462,4 +4478,3 @@ void computergetinput(int32_t snum, input *syn)
         syn->avel = min(max((((daang+1024-damyang)&2047)-1024)>>3,-127),127);
     }
 }
-

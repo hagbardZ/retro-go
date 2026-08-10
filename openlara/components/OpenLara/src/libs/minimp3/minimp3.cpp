@@ -63,7 +63,7 @@ typedef   signed long long   int64;
 #define libc_exp     exp
 #define libc_pow     pow
 
-#if defined(_MSC_VER) && !defined(_DEBUG) 
+#if defined(_MSC_VER) && !defined(_DEBUG)
 static INLINE double libc_frexp(double x, int *e) {
     double res = -9999.999;
     unsigned __int64 i = *(unsigned __int64*)(&x);
@@ -2374,7 +2374,7 @@ static int mp_decode_layer3(mp3_context_t *s) {
                             g->scale_factors[j++] = get_bits(&s->gb, sl);
                     }else{
                         libc_memset((void*) &g->scale_factors[j], 0, n);
-                        j += n;                        
+                        j += n;
 //                        for(i=0;i<n;i++)
 //                            g->scale_factors[j++] = 0;
                     }
@@ -2415,13 +2415,14 @@ static int mp3_decode_main(
 
     init_get_bits(&s->gb, buf + HEADER_SIZE, (buf_size - HEADER_SIZE)*8);
 
-    if (s->error_protection)
+    if (s->error_protection) {
         get_bits(&s->gb, 16);
+    }
 
-        nb_frames = mp_decode_layer3(s);
+    nb_frames = mp_decode_layer3(s);
 
-        s->last_buf_size=0;
-        if(s->in_gb.buffer){
+    s->last_buf_size=0;
+    if(s->in_gb.buffer){
             align_get_bits(&s->gb);
             i= (s->gb.size_in_bits - get_bits_count(&s->gb))>>3;
             if(i >= 0 && i <= BACKSTEP_SIZE){

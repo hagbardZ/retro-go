@@ -12,12 +12,30 @@ You will need a working installation of [esp-idf](https://docs.espressif.com/pro
 _Note: As of retro-go 1.47, I use 5.1. I used 4.4 for 1.44 to 1.46, 4.3 for 1.35 to 1.43, and 4.1 was used for 1.20 to 1.34._
 
 
-For Martendo32: use esp-idf v5.3.5 !!!
+### For Martendo32: use esp-idf v5.3.5 !!!
+
+### HDMI IPS Version with several emulators/games:   
+       
+       python rg_tool.py --target martendo32-ips-hdmi build-img launcher mp3-player snes9x retro-core prboom-go fmsx bootstrap openlara celeste cannonball classicube duke3d-go quake-go gwenesis gbsp ngp-go stella --no-networking 
+
+### compiling for Martendo32 (examples):
+       
        python rg_tool.py --target martendo32 build-img --no-networking
        python rg_tool.py --target martendo32-ips build-img --no-networking
        or
        python rg_tool.py --target martendo32 release --no-networking
        python rg_tool.py --target martendo32-ips release --no-networking
+
+### debug / test Software (example):       
+       
+       python rg_tool.py --target martendo32-ips --port /dev/ttyACM0 install launcher retro-core --no-networking
+
+       
+       
+       
+       
+       
+       
        
        
 ### ESP-IDF Patches

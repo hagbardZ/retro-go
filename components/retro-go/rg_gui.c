@@ -259,6 +259,25 @@ void rg_gui_copy_buffer(int left, int top, int width, int height, int stride, co
 {
     left = get_horizontal_position(left, width);
     top = get_vertical_position(top, height);
+
+    // When a buffer starts off the left/top edge of the screen (eg. centered text
+    // that is wider than the screen), clip it instead of writing out of bounds,
+    // which would bleed into the rows above.
+    if (left < 0)
+    {
+        buffer -= left;
+        width += left;
+        left = 0;
+    }
+    if (top < 0)
+    {
+        if (stride <= 0)
+            stride = width * 2;
+        buffer = (const uint16_t *)((const uint8_t *)buffer + (size_t)(-top) * stride);
+        height += top;
+        top = 0;
+    }
+
     width = RG_MIN(width, gui.screen_width - left);
     height = RG_MIN(height, gui.screen_height - top);
 
@@ -1068,19 +1087,38 @@ typedef struct
     size_t count;
     rg_bucket_t *filenames;
     bool (*validator)(const char *path);
+    bool browse_tree;
 } file_picker_opts_t;
 
 static int file_picker_cb(const rg_scandir_t *entry, void *arg)
 {
     file_picker_opts_t *f = arg;
-    if (f->validator && !(f->validator)(entry->path))
+    if (entry->is_dir)
+    {
+        if (!f->browse_tree)
+            return RG_SCANDIR_SKIP;
+    }
+    else if (f->validator && !(f->validator)(entry->path))
+    {
         return RG_SCANDIR_SKIP;
+    }
     rg_gui_option_t *options = realloc(f->options, (f->count + 2) * sizeof(rg_gui_option_t));
     if (!options)
         return RG_SCANDIR_STOP;
     char *name = rg_bucket_insert(f->filenames, entry->basename, strlen(entry->basename) + 1);
     f->options = options;
-    f->options[f->count++] = (rg_gui_option_t){(intptr_t)name, name, NULL, RG_DIALOG_FLAG_NORMAL, NULL};
+    if (entry->is_dir)
+    {
+        /* Show directories with a trailing slash so they stand out from files */
+        char label_buf[RG_PATH_MAX];
+        snprintf(label_buf, sizeof(label_buf), "%s/", entry->basename);
+        char *label = rg_bucket_insert(f->filenames, label_buf, strlen(label_buf) + 1);
+        f->options[f->count++] = (rg_gui_option_t){(intptr_t)name, label, NULL, RG_DIALOG_FLAG_NORMAL, NULL};
+    }
+    else
+    {
+        f->options[f->count++] = (rg_gui_option_t){(intptr_t)name, name, NULL, RG_DIALOG_FLAG_NORMAL, NULL};
+    }
     return RG_SCANDIR_CONTINUE;
 }
 
@@ -1091,6 +1129,7 @@ char *rg_gui_file_picker(const char *title, const char *path, bool (*validator)(
         .count = 0,
         .filenames = rg_bucket_create(4096),
         .validator = validator,
+        .browse_tree = browse_tree,
     };
     char *filepath = NULL;
 
@@ -1100,10 +1139,15 @@ char *rg_gui_file_picker(const char *title, const char *path, bool (*validator)(
     if (none_option)
         options.options[options.count++] = (rg_gui_option_t){0, _("<None>"), NULL, RG_DIALOG_FLAG_NORMAL, NULL};
 
-    // if (browse_tree)
-    //     options.options[options.count++] = (rg_gui_option_t){0, "...", NULL, RG_DIALOG_FLAG_NORMAL, NULL};
+    if (browse_tree)
+    {
+        /* Allow navigating up to the parent directory */
+        char *up = rg_bucket_insert(options.filenames, "..", 3);
+        options.options[options.count++] = (rg_gui_option_t){(intptr_t)up, _(".."), NULL, RG_DIALOG_FLAG_NORMAL, NULL};
+    }
 
-    if (!rg_storage_scandir(path, file_picker_cb, &options, 0) || options.count < 1)
+    uint32_t scan_flags = browse_tree ? (RG_SCANDIR_FILES | RG_SCANDIR_DIRS | RG_SCANDIR_STAT) : 0;
+    if (!rg_storage_scandir(path, file_picker_cb, &options, scan_flags) || options.count < 1)
     {
         rg_gui_alert(title, _("Folder is empty."));
         goto cleanup;
@@ -1113,13 +1157,31 @@ char *rg_gui_file_picker(const char *title, const char *path, bool (*validator)(
     char *filename = (char *)rg_gui_dialog(title, options.options, 0);
     if (filename != (void *)RG_DIALOG_CANCELLED)
     {
-        char buffer[RG_PATH_MAX] = "";
-        if (filename)
-            snprintf(buffer, RG_PATH_MAX, "%s/%s", path, filename);
-        filepath = strdup(buffer);
-        // if (browse_tree && rg_storage_stat(filepath).is_dir)
-        // {
-        // }
+        if (filename && strcmp(filename, "..") == 0)
+        {
+            /* Navigate up to the parent directory */
+            char parent[RG_PATH_MAX];
+            snprintf(parent, RG_PATH_MAX, "%s", path);
+            char *slash = strrchr(parent, '/');
+            if (slash && slash != parent)
+                *slash = '\0';
+            filepath = rg_gui_file_picker(title, parent, validator, browse_tree, none_option);
+        }
+        else
+        {
+            char buffer[RG_PATH_MAX] = "";
+            if (filename)
+                snprintf(buffer, RG_PATH_MAX, "%s/%s", path, filename);
+            if (browse_tree && filename && rg_storage_stat(buffer).is_dir)
+            {
+                /* Navigate down into the selected directory */
+                filepath = rg_gui_file_picker(title, buffer, validator, browse_tree, none_option);
+            }
+            else
+            {
+                filepath = strdup(buffer);
+            }
+        }
     }
 
 cleanup:

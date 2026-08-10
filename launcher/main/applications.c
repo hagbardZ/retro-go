@@ -370,8 +370,16 @@ static void tab_refresh(tab_t *tab, const char *selected)
         gui_resize_list(tab, 6);
         sprintf(tab->listbox.items[0].text, _("Welcome to Retro-Go!"));
         sprintf(tab->listbox.items[1].text, " ");
-        sprintf(tab->listbox.items[2].text, _("Place roms in folder: %s"), rg_relpath(app->paths.roms));
-        sprintf(tab->listbox.items[3].text, _("With file extension: %s"), app->extensions);
+        if (strcmp(app->partition, "mp3-player") == 0)
+        {
+            sprintf(tab->listbox.items[2].text, _("Place MP3s in folder: %s"), rg_relpath(app->paths.roms));
+            sprintf(tab->listbox.items[3].text, _("With file extension: %s"), app->extensions);
+        }
+        else
+        {
+            sprintf(tab->listbox.items[2].text, _("Place roms in folder: %s"), rg_relpath(app->paths.roms));
+            sprintf(tab->listbox.items[3].text, _("With file extension: %s"), app->extensions);
+        }
         sprintf(tab->listbox.items[4].text, " ");
         sprintf(tab->listbox.items[5].text, _("You can hide this tab in the menu"));
         tab->listbox.cursor = 4;
@@ -672,7 +680,10 @@ static void application(const char *desc, const char *name, const char *exts, co
     snprintf(app->extensions, sizeof(app->extensions), " %s ", exts);
     snprintf(app->paths.covers, RG_PATH_MAX, RG_BASE_PATH_COVERS "/%s", app->short_name);
     snprintf(app->paths.saves, RG_PATH_MAX, RG_BASE_PATH_SAVES "/%s", app->short_name);
-    snprintf(app->paths.roms, RG_PATH_MAX, RG_BASE_PATH_ROMS "/%s", app->short_name);
+    if (strcmp(app->partition, "mp3-player") == 0)
+        snprintf(app->paths.roms, RG_PATH_MAX, RG_BASE_PATH_ROMS "/music");
+    else
+        snprintf(app->paths.roms, RG_PATH_MAX, RG_BASE_PATH_ROMS "/%s", app->short_name);
     app->available = rg_system_have_app(app->partition);
     app->files = calloc(100, sizeof(retro_file_t));
     app->files_capacity = 100;
@@ -699,11 +710,13 @@ void applications_init(void)
     application("Atari Lynx", "lnx", "lnx zip", "retro-core", 64);
     application("Atari 2600", "a26", "a26 bin zip", "stella", 0);
     // application("Neo Geo Pocket Color", "ngp", "ngp ngc zip", "ngpocket-go", 0);
+    application("Neo Geo Pocket Color", "ngp", "ngp ngc zip", "ngp-go", 0);
     application("DOOM", "doom", "wad zip", "prboom-go", 0);
     application("Duke Nukem 3D", "duke3d", "grp", "duke3d-go", 0);
 	application("Quake", "quake", "pak", "quake-go", 0);
     application("MSX", "msx", "rom mx1 mx2 dsk", "fmsx", 0);
     application("Tomb Raider", "openlara", "tr1", "openlara", 0);
+    application("MP3 Player", "music", "mp3", "mp3-player", 0);
     application("Celeste", "celeste", "p8", "celeste", 0);
     application("Outrun", "cannonball", "ball", "cannonball", 0);
 	// Special app to bootstrap native esp32 binaries from the SD card

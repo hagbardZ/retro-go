@@ -38,7 +38,6 @@ Prepared for public release: 03/21/2003 - Charlie Wiederhold, 3D Realms
 #include "esp_attr.h"
 
 #include "SDL.h"
-#include <dirent.h>
 
 char  *mymembuf;
 EXT_RAM_BSS_ATTR uint8_t  MusicPtr[1];//72000
@@ -603,15 +602,7 @@ boolean SafeFileExists ( const char  * _filename )
     strncpy(filename, _filename, sizeof (filename));
     filename[sizeof (filename) - 1] = '\0';
     FixFilePath(filename);
-    SDL_LockDisplay();
-    int ret;
-#if( defined PLATFORM_WIN32)
-    ret = access(filename, 6)      
-#else
-    ret = access(filename, F_OK);
-#endif
-    SDL_UnlockDisplay();
-    return( ret == 0);
+    return rg_storage_exists(filename);
 }
 
 
@@ -946,5 +937,3 @@ void Shutdown(void)
         shutdown_func = NULL;
     }
 }
-
-

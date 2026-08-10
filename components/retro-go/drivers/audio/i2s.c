@@ -23,7 +23,10 @@
 // We can safely assume that no application will submit more than 640 audio frames per call to
 // driver_submit (32000/50). Using a single large buffer risks blocking the call needlessly because
 // some apps submit more than once per cycle or there could be occasional jitter (early submission).
-#define DMA_BUFFER_COUNT 4
+// 64 buffers (~278ms @44.1kHz) give enough headroom that the synchronous stalls of the caller
+// (SD-card reads/autosave on the streaming app's task, periodic UI redraws) don't starve the DMA
+// and cause audible dropouts. 64 * 192 * 4B = 48KB, allocated in internal RAM.
+#define DMA_BUFFER_COUNT 64
 #define DMA_BUFFER_LEN 180
 
 static struct {

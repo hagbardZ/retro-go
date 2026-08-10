@@ -46,8 +46,13 @@ Prepared for public release: 03/21/2003 - Charlie Wiederhold, 3D Realms
 
 #include "duke3d.h"
 #include <inttypes.h>
+#include <ctype.h>
+#include <stdlib.h>
+#include <string.h>
 #include "music.h"
 #include "rg_system.h"
+#include "rg_storage.h"
+#include "rg_utils.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -77,6 +82,18 @@ Prepared for public release: 03/21/2003 - Charlie Wiederhold, 3D Realms
 #define IDFILENAME "DUKE3D.IDF"
 
 #define TIMERUPDATESIZ 32
+
+static void copy_string_bounded(char *dst, size_t dst_size, const char *src)
+{
+    if (dst_size == 0)
+        return;
+
+    size_t length = 0;
+    while (length + 1 < dst_size && src[length] != '\0')
+        length++;
+    memcpy(dst, src, length);
+    dst[length] = '\0';
+}
 
 int32_t cameradist = 0, cameraclock = 0;
 uint8_t  eightytwofifty = 0;
@@ -2436,7 +2453,7 @@ void gameexit(char  *msg)
 {
     char  t[256];
 
-    strncpy(t,msg,256); t[255] = 0;
+    copy_string_bounded(t, sizeof(t), msg);
 
     if(*t != 0) ps[myconnectindex].palette = (uint8_t  *) &palette[0];
 
@@ -4454,7 +4471,7 @@ short spawn( short j, short pn )
                 break;
 
             case WATERDRIP:
-                if((j >= 0 && sprite[j].statnum == 10) || sprite[j].statnum == 1)
+                if(j >= 0 && (sprite[j].statnum == 10 || sprite[j].statnum == 1))
                 {
                     sp->shade = 32;
                     if(sprite[j].pal != 1)
@@ -6188,9 +6205,190 @@ const uint8_t  cheatquotes[NUMCHEATCODES][14] = {
 
 
 uint8_t  cheatbuf[10],cheatbuflen;
+
+// Activate a cheat directly by its index into cheatquotes[].
+// Used both by the keyboard-input path (cheats()) and the menu cheat picker.
+// Cheats that require typed parameters (warp/skill, indices 2 and 10) are
+// intentionally excluded from the menu path and are not handled here.
+void activate_cheat(int k)
+{
+    short i, j, weapon;
+
+    switch(k)
+    {
+        case 0:  // cornholio
+        case 18: // kroz — same effect: toggle god mode
+            ud.god = 1-ud.god;
+            if(ud.god)
+            {
+                pus = 1;
+                pub = 1;
+                sprite[ps[myconnectindex].i].cstat = 257;
+                hittype[ps[myconnectindex].i].temp_data[0] = 0;
+                hittype[ps[myconnectindex].i].temp_data[1] = 0;
+                hittype[ps[myconnectindex].i].temp_data[2] = 0;
+                hittype[ps[myconnectindex].i].temp_data[3] = 0;
+                hittype[ps[myconnectindex].i].temp_data[4] = 0;
+                hittype[ps[myconnectindex].i].temp_data[5] = 0;
+                sprite[ps[myconnectindex].i].hitag = 0;
+                sprite[ps[myconnectindex].i].lotag = 0;
+                sprite[ps[myconnectindex].i].pal = ps[myconnectindex].palookup;
+                FTA(17,&ps[myconnectindex],1);
+            }
+            else
+            {
+                ud.god = 0;
+                sprite[ps[myconnectindex].i].extra = max_player_health;
+                hittype[ps[myconnectindex].i].extra = -1;
+                ps[myconnectindex].last_extra = max_player_health;
+                FTA(18,&ps[myconnectindex],1);
+            }
+            sprite[ps[myconnectindex].i].extra = max_player_health;
+            hittype[ps[myconnectindex].i].extra = 0;
+            break;
+
+        case 1: // stuff — all weapons, ammo, inventory and keys
+            j = VOLUMEONE ? 6 : 0;
+            for(weapon = PISTOL_WEAPON; weapon < MAX_WEAPONS-j; weapon++)
+                ps[myconnectindex].gotweapon[weapon] = 1;
+            for(weapon = PISTOL_WEAPON; weapon < MAX_WEAPONS-j; weapon++)
+                addammo(weapon, &ps[myconnectindex], max_ammo_amount[weapon]);
+            ps[myconnectindex].ammo_amount[GROW_WEAPON] = 50;
+            ps[myconnectindex].steroids_amount  = 400;
+            ps[myconnectindex].heat_amount      = 1200;
+            ps[myconnectindex].boot_amount      = 200;
+            ps[myconnectindex].shield_amount    = 100;
+            ps[myconnectindex].scuba_amount     = 6400;
+            ps[myconnectindex].holoduke_amount  = 2400;
+            ps[myconnectindex].jetpack_amount   = 1600;
+            ps[myconnectindex].firstaid_amount  = max_player_health;
+            ps[myconnectindex].got_access       = 7;
+            ps[myconnectindex].inven_icon       = 1;
+            FTA(5,&ps[myconnectindex],1);
+            break;
+
+        case 3: // coords — toggle coordinate display
+            ud.coords = 1-ud.coords;
+            break;
+
+        case 4: // view — toggle over-shoulder camera
+            if(ps[myconnectindex].over_shoulder_on)
+                ps[myconnectindex].over_shoulder_on = 0;
+            else
+            {
+                ps[myconnectindex].over_shoulder_on = 1;
+                cameradist = 0;
+                cameraclock = totalclock;
+            }
+            break;
+
+        case 6: // unlock — open all locked sectors
+            for(i=numsectors-1; i>=0; i--)
+            {
+                j = sector[i].lotag;
+                if(j == -1 || j == 32767) continue;
+                if((j & 0x7fff) > 2)
+                {
+                    if(j&(0xffff-16384))
+                        sector[i].lotag &= (0xffff-16384);
+                    operatesectors(i,ps[myconnectindex].i);
+                }
+            }
+            operateforcefields(ps[myconnectindex].i,-1);
+            FTA(100,&ps[myconnectindex],1);
+            break;
+
+        case 7: // cashman
+            ud.cashman = 1-ud.cashman;
+            break;
+
+        case 8: // items — all inventory and keys
+            ps[myconnectindex].steroids_amount  = 400;
+            ps[myconnectindex].heat_amount      = 1200;
+            ps[myconnectindex].boot_amount      = 200;
+            ps[myconnectindex].shield_amount    = 100;
+            ps[myconnectindex].scuba_amount     = 6400;
+            ps[myconnectindex].holoduke_amount  = 2400;
+            ps[myconnectindex].jetpack_amount   = 1600;
+            ps[myconnectindex].firstaid_amount  = max_player_health;
+            ps[myconnectindex].got_access       = 7;
+            FTA(5,&ps[myconnectindex],1);
+            break;
+
+        case 9: // rate — toggle FPS display
+            ud.tickrate ^= 1;
+            vscrn();
+            break;
+
+        case 12: // hyper — steroids + nightvision
+            ps[myconnectindex].steroids_amount = 399;
+            ps[myconnectindex].heat_amount     = 1200;
+            FTA(37,&ps[myconnectindex],1);
+            break;
+
+        case 13: // monsters — toggle: 0=on 1=invisible/off
+            actor_tog = actor_tog ? 0 : 1;
+            break;
+
+        case 17: // showmap — toggle full map reveal
+            ud.showallmap = 1-ud.showallmap;
+            if(ud.showallmap)
+            {
+                for(i=0; i<(MAXSECTORS>>3); i++) show2dsector[i] = 255;
+                for(i=0; i<(MAXWALLS>>3);   i++) show2dwall[i]   = 255;
+                FTA(111,&ps[myconnectindex],1);
+            }
+            else
+            {
+                for(i=0; i<(MAXSECTORS>>3); i++) show2dsector[i] = 0;
+                for(i=0; i<(MAXWALLS>>3);   i++) show2dwall[i]   = 0;
+                FTA(1,&ps[myconnectindex],1);
+            }
+            break;
+
+        case 20: // clip — toggle noclip
+            ud.clipping = 1-ud.clipping;
+            FTA(112+ud.clipping,&ps[myconnectindex],1);
+            break;
+
+        case 21: // weapons — all weapons and ammo
+            j = VOLUMEONE ? 6 : 0;
+            for(weapon = PISTOL_WEAPON; weapon < MAX_WEAPONS-j; weapon++)
+            {
+                addammo(weapon, &ps[myconnectindex], max_ammo_amount[weapon]);
+                ps[myconnectindex].gotweapon[weapon] = 1;
+            }
+            FTA(119,&ps[myconnectindex],1);
+            break;
+
+        case 22: // inventory — all inventory items
+            ps[myconnectindex].steroids_amount  = 400;
+            ps[myconnectindex].heat_amount      = 1200;
+            ps[myconnectindex].boot_amount      = 200;
+            ps[myconnectindex].shield_amount    = 100;
+            ps[myconnectindex].scuba_amount     = 6400;
+            ps[myconnectindex].holoduke_amount  = 2400;
+            ps[myconnectindex].jetpack_amount   = 1600;
+            ps[myconnectindex].firstaid_amount  = max_player_health;
+            FTA(120,&ps[myconnectindex],1);
+            break;
+
+        case 23: // keys — all key cards
+            ps[myconnectindex].got_access = 7;
+            FTA(121,&ps[myconnectindex],1);
+            break;
+
+        case 24: // debug
+            debug_on = 1-debug_on;
+            break;
+    }
+
+    ps[myconnectindex].cheat_phase = 0;
+}
+
 void cheats(void)
 {
-    short ch, i, j, k, weapon;
+    short ch, i, j, k;
 
     if( (ps[myconnectindex].gm&MODE_TYPE) || (ps[myconnectindex].gm&MODE_MENU))
         return;
@@ -6236,369 +6434,60 @@ void cheats(void)
 
           FOUNDCHEAT:
           {
-                switch(k)
+                // Warp/skill cheats need the typed digits from cheatbuf, so
+                // they stay inline here rather than going through activate_cheat().
+                if(k == 2 || k == 10) // scotty### / skill#
                 {
-                    case 0: // cornholio
-                    case 18: // kroz
+                    if(k == 2)
+                    {
+                        short volnume = cheatbuf[6] - '0';
+                        short levnume = (cheatbuf[7] - '0')*10 + (cheatbuf[8]-'0');
+                        volnume--;
+                        levnume--;
+                        if(VOLUMEONE && volnume > 0)
+                        { ps[myconnectindex].cheat_phase = 0; KB_FlushKeyboardQueue(); return; }
+                        if(((volnume > 4)&&PLUTOPAK) || ((volnume > 3)&&!PLUTOPAK))
+                        { ps[myconnectindex].cheat_phase = 0; KB_FlushKeyboardQueue(); return; }
+                        if(volnume == 0 && levnume > 5)
+                        { ps[myconnectindex].cheat_phase = 0; KB_FlushKeyboardQueue(); return; }
+                        if(volnume != 0 && levnume >= 11)
+                        { ps[myconnectindex].cheat_phase = 0; KB_FlushKeyboardQueue(); return; }
+                        ud.m_volume_number = ud.volume_number = volnume;
+                        ud.m_level_number  = ud.level_number  = levnume;
+                    }
+                    else
+                        ud.m_player_skill = ud.player_skill = cheatbuf[5] - '1';
 
-                        ud.god = 1-ud.god;
+                    if(numplayers > 1 && myconnectindex == connecthead)
+                    {
+                        tempbuf[0]  = 5;
+                        tempbuf[1]  = ud.m_level_number;
+                        tempbuf[2]  = ud.m_volume_number;
+                        tempbuf[3]  = ud.m_player_skill;
+                        tempbuf[4]  = ud.m_monsters_off;
+                        tempbuf[5]  = ud.m_respawn_monsters;
+                        tempbuf[6]  = ud.m_respawn_items;
+                        tempbuf[7]  = ud.m_respawn_inventory;
+                        tempbuf[8]  = ud.m_coop;
+                        tempbuf[9]  = ud.m_marker;
+                        tempbuf[10] = ud.m_ffire;
+                        for(i=connecthead;i>=0;i=connectpoint2[i])
+                            sendpacket(i,(uint8_t*)tempbuf,11);
+                    }
+                    else ps[myconnectindex].gm |= MODE_RESTART;
 
-                        if(ud.god)
-                        { // set on
-                            pus = 1;
-                            pub = 1;
-                            sprite[ps[myconnectindex].i].cstat = 257;
-
-                            hittype[ps[myconnectindex].i].temp_data[0] = 0;
-                            hittype[ps[myconnectindex].i].temp_data[1] = 0;
-                            hittype[ps[myconnectindex].i].temp_data[2] = 0;
-                            hittype[ps[myconnectindex].i].temp_data[3] = 0;
-                            hittype[ps[myconnectindex].i].temp_data[4] = 0;
-                            hittype[ps[myconnectindex].i].temp_data[5] = 0;
-
-                            sprite[ps[myconnectindex].i].hitag = 0;
-                            sprite[ps[myconnectindex].i].lotag = 0;
-                            sprite[ps[myconnectindex].i].pal =
-                                ps[myconnectindex].palookup;
-
-                            FTA(17,&ps[myconnectindex],1);
-                        }
-                        else // set off
-                        {
-                            ud.god = 0;
-                            sprite[ps[myconnectindex].i].extra = max_player_health;
-                            hittype[ps[myconnectindex].i].extra = -1;
-                            ps[myconnectindex].last_extra = max_player_health;
-                            FTA(18,&ps[myconnectindex],1);
-                        }
-
-                        sprite[ps[myconnectindex].i].extra = max_player_health;
-                        hittype[ps[myconnectindex].i].extra = 0;
-                        ps[myconnectindex].cheat_phase = 0;
-                        KB_FlushKeyboardQueue();
-
-                        return;
-
-                    case 1: // stuff
-
-						if(VOLUMEONE)
-                        	j = 6;
-						else
-                        	j = 0;
-
-                        for ( weapon = PISTOL_WEAPON;weapon < MAX_WEAPONS-j;weapon++ )
-                           ps[myconnectindex].gotweapon[weapon]  = 1;
-
-                        for ( weapon = PISTOL_WEAPON;
-                              weapon < (MAX_WEAPONS-j);
-                              weapon++ )
-                            addammo( weapon, &ps[myconnectindex], max_ammo_amount[weapon] );
-
-                        ps[myconnectindex].ammo_amount[GROW_WEAPON] = 50;
-
-                        ps[myconnectindex].steroids_amount =         400;
-                        ps[myconnectindex].heat_amount     =        1200;
-                        ps[myconnectindex].boot_amount          =    200;
-                        ps[myconnectindex].shield_amount =           100;
-                        ps[myconnectindex].scuba_amount =            6400;
-                        ps[myconnectindex].holoduke_amount =         2400;
-                        ps[myconnectindex].jetpack_amount =          1600;
-                        ps[myconnectindex].firstaid_amount =         max_player_health;
-
-                        ps[myconnectindex].got_access =              7;
-                        FTA(5,&ps[myconnectindex],1);
-                        ps[myconnectindex].cheat_phase = 0;
-
-                        ps[myconnectindex].cheat_phase = 0;
-                        KB_FlushKeyboardQueue();
-                        ps[myconnectindex].inven_icon = 1;
-                        return;
-
-                    case 2:  // dnscotty###
-                    case 10: // skill#
-
-                        if(k == 2)
-                        {
-                            short volnume,levnume;
-                            volnume = cheatbuf[6] - '0';
-                            levnume = (cheatbuf[7] - '0')*10+(cheatbuf[8]-'0');
-
-                            volnume--;
-                            levnume--;
-							if (VOLUMEONE)
-							{
-								if( volnume > 0 )
-	                            {
-	                                ps[myconnectindex].cheat_phase = 0;
-	                                KB_FlushKeyboardQueue();
-	                                return;
-	                            }
-							}
-
-                            if((volnume > 4)&&PLUTOPAK)
-                            {
-                                ps[myconnectindex].cheat_phase = 0;
-                                KB_FlushKeyboardQueue();
-                                return;
-                            }
-                            else
-
-							if((volnume > 3)&&!PLUTOPAK)
-                            {
-                                ps[myconnectindex].cheat_phase = 0;
-                                KB_FlushKeyboardQueue();
-                                return;
-                            }
-                            else
-
-                            if(volnume == 0)
-                            {
-                                if(levnume > 5)
-                                {
-                                    ps[myconnectindex].cheat_phase = 0;
-                                    KB_FlushKeyboardQueue();
-                                    return;
-                                }
-                            }
-                            else
-                            {
-                                if(levnume >= 11)
-                                {
-                                    ps[myconnectindex].cheat_phase = 0;
-                                    KB_FlushKeyboardQueue();
-                                    return;
-                                }
-                            }
-
-                            ud.m_volume_number = ud.volume_number = volnume;
-                            ud.m_level_number = ud.level_number = levnume;
-
-                        }
-                        else ud.m_player_skill = ud.player_skill =
-                            cheatbuf[5] - '1';
-
-                        if(numplayers > 1 && myconnectindex == connecthead)
-                        {
-                            tempbuf[0] = 5;
-                            tempbuf[1] = ud.m_level_number;
-                            tempbuf[2] = ud.m_volume_number;
-                            tempbuf[3] = ud.m_player_skill;
-                            tempbuf[4] = ud.m_monsters_off;
-                            tempbuf[5] = ud.m_respawn_monsters;
-                            tempbuf[6] = ud.m_respawn_items;
-                            tempbuf[7] = ud.m_respawn_inventory;
-                            tempbuf[8] = ud.m_coop;
-                            tempbuf[9] = ud.m_marker;
-                            tempbuf[10] = ud.m_ffire;
-
-                            for(i=connecthead;i>=0;i=connectpoint2[i])
-                                sendpacket(i,(uint8_t*)tempbuf,11);
-                        }
-                        else ps[myconnectindex].gm |= MODE_RESTART;
-
-                        ps[myconnectindex].cheat_phase = 0;
-                        KB_FlushKeyboardQueue();
-                        return;
-
-                    case 3: // coords
-                        ps[myconnectindex].cheat_phase = 0;
-                        ud.coords = 1-ud.coords;
-                        KB_FlushKeyboardQueue();
-                        return;
-
-                    case 4: // view
-                        if( ps[myconnectindex].over_shoulder_on )
-                            ps[myconnectindex].over_shoulder_on = 0;
-                        else
-                        {
-                            ps[myconnectindex].over_shoulder_on = 1;
-                            cameradist = 0;
-                            cameraclock = totalclock;
-                        }
-                        // FTA(22,&ps[myconnectindex],1);
-                        ps[myconnectindex].cheat_phase = 0;
-                        KB_FlushKeyboardQueue();
-                        return;
-
-                    case 5: // time
-                        // FTA(21,&ps[myconnectindex]);
-                        ps[myconnectindex].cheat_phase = 0;
-                        KB_FlushKeyboardQueue();
-                        return;
-
-					case 6: // unlock
-                        for(i=numsectors-1;i>=0;i--) //Unlock
-                        {
-                            j = sector[i].lotag;
-                            if(j == -1 || j == 32767) continue;
-                            if( (j & 0x7fff) > 2 )
-                            {
-                                if( j&(0xffff-16384) )
-                                    sector[i].lotag &= (0xffff-16384);
-                                operatesectors(i,ps[myconnectindex].i);
-                            }
-                        }
-                        operateforcefields(ps[myconnectindex].i,-1);
-
-                        FTA(100,&ps[myconnectindex],1);
-                        ps[myconnectindex].cheat_phase = 0;
-                        KB_FlushKeyboardQueue();
-                        return;
-
-                    case 7: // cashman
-                        ud.cashman = 1-ud.cashman;
-                        KB_ClearKeyDown(sc_N);
-                        ps[myconnectindex].cheat_phase = 0;
-                        return;
-
-                    case 8: // items
-                        ps[myconnectindex].steroids_amount =         400;
-                        ps[myconnectindex].heat_amount     =        1200;
-                        ps[myconnectindex].boot_amount          =    200;
-                        ps[myconnectindex].shield_amount =           100;
-                        ps[myconnectindex].scuba_amount =            6400;
-                        ps[myconnectindex].holoduke_amount =         2400;
-                        ps[myconnectindex].jetpack_amount =          1600;
-
-                        ps[myconnectindex].firstaid_amount =         max_player_health;
-                        ps[myconnectindex].got_access =              7;
-                        FTA(5,&ps[myconnectindex],1);
-                        ps[myconnectindex].cheat_phase = 0;
-                        KB_FlushKeyboardQueue();
-                        return;
-
-                    case 9: // rate
-                        ud.tickrate ^= 1;
-						vscrn(); // FIX_00056: Refresh issue w/FPS, small Weapon and custom FTA, when screen resized down
-                        ps[myconnectindex].cheat_phase = 0;
-                        KB_FlushKeyboardQueue();
-                        return;
-
-                    case 11: // beta
-                        FTA(105,&ps[myconnectindex],1);
-                        KB_ClearKeyDown(sc_H);
-                        ps[myconnectindex].cheat_phase = 0;
-                        KB_FlushKeyboardQueue();
-                        return;
-
-                    case 12: // hyper
-                        ps[myconnectindex].steroids_amount = 399;
-                        ps[myconnectindex].heat_amount = 1200;
-                        ps[myconnectindex].cheat_phase = 0;
-                        FTA(37,&ps[myconnectindex],1);
-                        KB_FlushKeyboardQueue();
-                        return;
-
-                    case 13: // monsters
-                        if(actor_tog == 3) actor_tog = 0;
-                        actor_tog++;
-                        ps[screenpeek].cheat_phase = 0;
-                        KB_FlushKeyboardQueue();
-                        return;
-
-                    case 14: // <RESERVED>
-                    case 25: // ??
-                        ud.eog = 1;
-                        ps[myconnectindex].gm |= MODE_EOL;
-                        KB_FlushKeyboardQueue();
-                        return;
-
-                    case 15: // <RESERVED>
-                        ps[myconnectindex].gm = MODE_EOL;
-                        ps[myconnectindex].cheat_phase = 0;
-                        KB_FlushKeyboardQueue();
-                        return;
-
-                    case 16: // todd
-                        FTA(99,&ps[myconnectindex],1);
-                        ps[myconnectindex].cheat_phase = 0;
-                        KB_FlushKeyboardQueue();
-                        return;
-
-                   case 17: // showmap
-                        ud.showallmap = 1-ud.showallmap;
-                        if(ud.showallmap)
-                        {
-                            for(i=0;i<(MAXSECTORS>>3);i++)
-                                show2dsector[i] = 255;
-                            for(i=0;i<(MAXWALLS>>3);i++)
-                                show2dwall[i] = 255;
-                            FTA(111,&ps[myconnectindex],1);
-                        }
-                        else
-                        {
-                            for(i=0;i<(MAXSECTORS>>3);i++)
-                                show2dsector[i] = 0;
-                            for(i=0;i<(MAXWALLS>>3);i++)
-                                show2dwall[i] = 0;
-                            FTA(1,&ps[myconnectindex],1);
-                        }
-                        ps[myconnectindex].cheat_phase = 0;
-                        KB_FlushKeyboardQueue();
-                        return;
-
-                    case 19: // allen
-                        FTA(79,&ps[myconnectindex],1);
-                        ps[myconnectindex].cheat_phase = 0;
-                        KB_ClearKeyDown(sc_N);
-                        return;
-
-					case 20: // clip
-                        ud.clipping = 1-ud.clipping;
-                        KB_FlushKeyboardQueue();
-                        ps[myconnectindex].cheat_phase = 0;
-                        FTA(112+ud.clipping,&ps[myconnectindex],1);
-                        return;
-
-					case 21: // weapons
-						if(VOLUMEONE)
-                        	j = 6;
-						else
-                        	j = 0;
-
-                        for ( weapon = PISTOL_WEAPON;weapon < MAX_WEAPONS-j;weapon++ )
-                        {
-                            addammo( weapon, &ps[myconnectindex], max_ammo_amount[weapon] );
-                            ps[myconnectindex].gotweapon[weapon]  = 1;
-                        }
-
-                        KB_FlushKeyboardQueue();
-                        ps[myconnectindex].cheat_phase = 0;
-                        FTA(119,&ps[myconnectindex],1);
-                        return;
-
-                    case 22: // inventory
-                        KB_FlushKeyboardQueue();
-                        ps[myconnectindex].cheat_phase = 0;
-                        ps[myconnectindex].steroids_amount =         400;
-                        ps[myconnectindex].heat_amount     =        1200;
-                        ps[myconnectindex].boot_amount          =    200;
-                        ps[myconnectindex].shield_amount =           100;
-                        ps[myconnectindex].scuba_amount =            6400;
-                        ps[myconnectindex].holoduke_amount =         2400;
-                        ps[myconnectindex].jetpack_amount =          1600;
-                        ps[myconnectindex].firstaid_amount =         max_player_health;
-                        FTA(120,&ps[myconnectindex],1);
-                        ps[myconnectindex].cheat_phase = 0;
-                        return;
-
-                    case 23: // keys
-                        ps[myconnectindex].got_access =              7;
-                        KB_FlushKeyboardQueue();
-                        ps[myconnectindex].cheat_phase = 0;
-                        FTA(121,&ps[myconnectindex],1);
-                        return;
-
-                    case 24: // debug
-                        debug_on = 1-debug_on;
-                        KB_FlushKeyboardQueue();
-                        ps[myconnectindex].cheat_phase = 0;
-                        break;
+                    ps[myconnectindex].cheat_phase = 0;
+                    KB_FlushKeyboardQueue();
+                    return;
                 }
-             }
+
+                // All other cheats go through the shared helper.
+                activate_cheat(k);
+                KB_FlushKeyboardQueue();
+                return;
           }
        }
-
+    }
     else
     {
         if( KB_KeyPressed(sc_D) )
@@ -6889,10 +6778,7 @@ void nonsharedkeys(void)
                     return;
                 }
                 cmenu(350);
-                screencapt = 1;
-                displayrooms(myconnectindex,65536);
-                savetemp("duke3d.tmp",tiles[MAXTILES-1].data,160*100);
-                screencapt = 0;
+                capture_savegame_thumbnail();
                 FX_StopAllSounds();
                 clearsoundlocks();
 
@@ -6961,10 +6847,7 @@ void nonsharedkeys(void)
                 FTA(118,&ps[myconnectindex],1);
                 return;
             }
-            screencapt = 1;
-            displayrooms(myconnectindex,65536);
-            savetemp("duke3d.tmp",tiles[MAXTILES-1].data,160*100);
-            screencapt = 0;
+            capture_savegame_thumbnail();
             if( lastsavedpos >= 0 )
             {
                 inputloc = strlen(&ud.savegame[lastsavedpos][0]);
@@ -7754,6 +7637,241 @@ void ShutDown( void )
 ===================
 */
 
+static int def_ci_starts_with(const char *s, const char *prefix)
+{
+    while (*prefix)
+    {
+        if (tolower((unsigned char)*s) != tolower((unsigned char)*prefix))
+            return 0;
+        s++;
+        prefix++;
+    }
+    return 1;
+}
+
+static int def_find_keyword_ci(const char *start, const char *end, const char *keyword, const char **out)
+{
+    size_t kwlen = strlen(keyword);
+    const char *p;
+
+    if ((start == NULL) || (end == NULL) || (start >= end) || (kwlen == 0))
+        return 0;
+
+    for (p = start; p + kwlen <= end; p++)
+    {
+        if ((p > start) && (isalnum((unsigned char)p[-1]) || p[-1] == '_'))
+            continue;
+
+        if (def_ci_starts_with(p, keyword))
+        {
+            const char after = p[kwlen];
+            if (!(isalnum((unsigned char)after) || after == '_'))
+            {
+                if (out) *out = p;
+                return 1;
+            }
+        }
+    }
+
+    return 0;
+}
+
+static int def_parse_string_value(const char *blockStart, const char *blockEnd, const char *key, char *out, size_t outSize)
+{
+    const char *kw = NULL;
+    const char *p;
+
+    if (!def_find_keyword_ci(blockStart, blockEnd, key, &kw))
+        return 0;
+
+    p = kw + strlen(key);
+    while ((p < blockEnd) && isspace((unsigned char)*p))
+        p++;
+
+    if (p >= blockEnd)
+        return 0;
+
+    if ((*p == '"') || (*p == '\''))
+    {
+        const char quote = *p++;
+        const char *start = p;
+        while ((p < blockEnd) && (*p != quote))
+            p++;
+        if (p <= start)
+            return 0;
+
+        {
+            size_t len = (size_t)(p - start);
+            if (len >= outSize)
+                len = outSize - 1;
+            memcpy(out, start, len);
+            out[len] = '\0';
+            return (len > 0);
+        }
+    }
+    else
+    {
+        const char *start = p;
+        while ((p < blockEnd) && !isspace((unsigned char)*p) && (*p != '}'))
+            p++;
+        if (p <= start)
+            return 0;
+
+        {
+            size_t len = (size_t)(p - start);
+            if (len >= outSize)
+                len = outSize - 1;
+            memcpy(out, start, len);
+            out[len] = '\0';
+            return (len > 0);
+        }
+    }
+}
+
+static int def_parse_int_value(const char *blockStart, const char *blockEnd, const char *key, int *out)
+{
+    const char *kw = NULL;
+    const char *p;
+    char *endp;
+    long v;
+
+    if (!def_find_keyword_ci(blockStart, blockEnd, key, &kw))
+        return 0;
+
+    p = kw + strlen(key);
+    while ((p < blockEnd) && isspace((unsigned char)*p))
+        p++;
+
+    if (p >= blockEnd)
+        return 0;
+
+    v = strtol(p, &endp, 10);
+    if (endp == p)
+        return 0;
+
+    *out = (int)v;
+    return 1;
+}
+
+static void apply_sound_overrides_from_def(void)
+{
+    int32_t defHandle;
+
+    defHandle = kopen4load("duke3d.def", 1);
+    if (defHandle == -1)
+        return;
+
+    {
+        int32_t defSize = kfilelength(defHandle);
+        char *defText;
+        const char *scan;
+        const char *end;
+        int overrideCount = 0;
+
+        if (defSize <= 0)
+        {
+            kclose(defHandle);
+            return;
+        }
+
+        defText = (char *)malloc((size_t)defSize + 1);
+        if (defText == NULL)
+        {
+            kclose(defHandle);
+            return;
+        }
+
+        if (kread(defHandle, defText, defSize) != defSize)
+        {
+            free(defText);
+            kclose(defHandle);
+            return;
+        }
+
+        defText[defSize] = '\0';
+        kclose(defHandle);
+
+        scan = defText;
+        end = defText + defSize;
+
+        while (scan < end)
+        {
+            const char *kw = NULL;
+            const char *p;
+            const char *braceOpen;
+            const char *braceClose;
+            int soundId;
+            char soundFile[14];
+            int minpitch;
+            int maxpitch;
+            int priority;
+            int type;
+            int distance;
+
+            if (!def_find_keyword_ci(scan, end, "sound", &kw))
+                break;
+
+            p = kw + strlen("sound");
+            while ((p < end) && isspace((unsigned char)*p))
+                p++;
+
+            if ((p >= end) || (*p != '{'))
+            {
+                scan = kw + 1;
+                continue;
+            }
+
+            braceOpen = p + 1;
+            braceClose = braceOpen;
+            while ((braceClose < end) && (*braceClose != '}'))
+                braceClose++;
+
+            if (braceClose >= end)
+                break;
+
+            if (!def_parse_int_value(braceOpen, braceClose, "id", &soundId) ||
+                (soundId < 0) || (soundId >= NUM_SOUNDS))
+            {
+                scan = braceClose + 1;
+                continue;
+            }
+
+            if (def_parse_string_value(braceOpen, braceClose, "file", soundFile, sizeof(soundFile)))
+            {
+                copy_string_bounded(sounds[soundId], sizeof(sounds[soundId]), soundFile);
+            }
+
+            if (def_parse_int_value(braceOpen, braceClose, "minpitch", &minpitch))
+                soundps[soundId] = (short)minpitch;
+            if (def_parse_int_value(braceOpen, braceClose, "maxpitch", &maxpitch))
+                soundpe[soundId] = (short)maxpitch;
+            if (def_parse_int_value(braceOpen, braceClose, "priority", &priority))
+                soundpr[soundId] = (uint8_t)priority;
+            if (def_parse_int_value(braceOpen, braceClose, "type", &type))
+                soundm[soundId] = (uint8_t)type;
+            if (def_parse_int_value(braceOpen, braceClose, "distance", &distance))
+                soundvo[soundId] = (short)distance;
+
+            RG_LOGD("duke3d.def: sound override applied id=%d file='%s' min=%d max=%d prio=%u type=%u dist=%d",
+                   soundId,
+                   sounds[soundId],
+                   (int)soundps[soundId],
+                   (int)soundpe[soundId],
+                   (unsigned)soundpr[soundId],
+                   (unsigned)soundm[soundId],
+                   (int)soundvo[soundId]);
+            overrideCount++;
+
+            scan = braceClose + 1;
+        }
+
+        if (overrideCount > 0)
+            printf("duke3d.def: applied %d sound override(s)\n", overrideCount);
+
+        free(defText);
+    }
+}
+
 void compilecons(void)
 {
 	char  userconfilename[512];
@@ -7765,6 +7883,7 @@ void compilecons(void)
 	sprintf(userconfilename, "%s", confilename);
 
    loadefs(userconfilename,mymembuf, 0);
+   apply_sound_overrides_from_def();
 
 }
 
@@ -7804,9 +7923,9 @@ void Startup(void)
 // CTW END - MODIFICATION
    inittimer(TICRATE);
 
-   puts("Loading art header.");
+   // puts("Loading art header.");
 
-  loadpics("tiles000.art", "\0");
+   loadpics("tiles000.art", "\0");
 
 
    readsavenames();
@@ -7817,7 +7936,7 @@ void Startup(void)
    initmultiplayers(0,0,0);
 
    if(numplayers > 1)
-    puts("Multiplayer initialized.");
+    RG_LOGD("Multiplayer initialized.");
 
    ps[myconnectindex].palette = (uint8_t  *) &palette[0];
    SetupGameButtons();
@@ -7825,24 +7944,25 @@ void Startup(void)
    if(networkmode == 255)
        networkmode = 1;
 
-#ifdef PLATFORM_DOS
-   puts("Checking music inits.");
+   #ifdef PLATFORM_DOS
+   RG_LOGD("Checking music inits.");
    MusicStartup();
-   puts("Checking sound inits.");
+   RG_LOGD("Checking sound inits.");
    SoundStartup();
-#else
+   #else
    /* SBF - wasn't sure if swapping them would harm anything. */
-   puts("Checking sound inits.");
+   RG_LOGD("Checking sound inits.");
    SoundStartup();
-   puts("Checking music inits.");
+   RG_LOGD("Checking music inits.");
    MusicStartup();
-#endif
+   #endif
 
    // AutoAim
-	if(nHostForceDisableAutoaim)
-		ud.auto_aim = 0;
+   if(nHostForceDisableAutoaim)
+   ud.auto_aim = 0;
 
-   puts("loadtmb()");
+   RG_LOGD("loadtmb()");
+
    loadtmb();
 }
 
@@ -8104,28 +8224,162 @@ int dukeGRP_Match(char* filename,int length)
 
 #include <dirent.h>
 void findGRPToUse(char * groupfilefullpath){
-    strcpy(groupfilefullpath,"/sd/roms/duke3d/duke3d.grp");
+    const rg_app_t *app = rg_system_get_app();
+
+    if (app && app->romPath && app->romPath[0] != '\0')
+    {
+        snprintf(groupfilefullpath, 512, "%s", app->romPath);
+        RG_LOGI("Using Duke3D GRP from boot config: %s", groupfilefullpath);
+        return;
+    }
+
+    snprintf(groupfilefullpath, 512, "%s", RG_BASE_PATH_ROMS "/duke3d/duke3d.grp");
+    RG_LOGW("No ROM in boot config, falling back to: %s", groupfilefullpath);
 }
 
 #endif
+
+static int name_contains(const char *haystack, const char *needle)
+{
+    int hlen = strlen(haystack);
+    int nlen = strlen(needle);
+    for (int i = 0; i <= hlen - nlen; i++)
+    {
+        int match = 1;
+        for (int j = 0; j < nlen; j++)
+        {
+            if (tolower((unsigned char)haystack[i + j]) != tolower((unsigned char)needle[j]))
+            {
+                match = 0;
+                break;
+            }
+        }
+        if (match) return 1;
+    }
+    return 0;
+}
+
+static int is_expansion_grp(const char *name)
+{
+    if (name_contains(name, "dukedc")) return 1;
+    if (name_contains(name, "vacation")) return 1;
+    if (name_contains(name, "carib")) return 1;
+    if (name_contains(name, "nwinter")) return 1;
+    if (name_contains(name, "winter")) return 1;
+    return 0;
+}
+
+static void detect_and_set_confilename(void)
+{
+    int32_t fd;
+    
+    // Check Duke It Out In D.C.
+    fd = kopen4load("dukedc.con", 1);
+    if (fd >= 0) {
+        kclose(fd);
+        strcpy(confilename, "dukedc.con");
+        printf("Expansion GRP loaded: using dukedc.con\n");
+        return;
+    } else if (SafeFileExists("dukedc.con")) {
+        strcpy(confilename, "dukedc.con");
+        printf("Expansion GRP loaded: using external dukedc.con\n");
+        return;
+    }
+    
+    // Check Duke Caribbean (Life's a Beach)
+    fd = kopen4load("vacation.con", 1);
+    if (fd >= 0) {
+        kclose(fd);
+        strcpy(confilename, "vacation.con");
+        printf("Expansion GRP loaded: using vacation.con\n");
+        return;
+    } else if (SafeFileExists("vacation.con")) {
+        strcpy(confilename, "vacation.con");
+        printf("Expansion GRP loaded: using external vacation.con\n");
+        return;
+    }
+    
+    // Check Duke: Nuclear Winter
+    fd = kopen4load("nwinter.con", 1);
+    if (fd >= 0) {
+        kclose(fd);
+        strcpy(confilename, "nwinter.con");
+        printf("Expansion GRP loaded: using nwinter.con\n");
+        return;
+    } else if (SafeFileExists("nwinter.con")) {
+        strcpy(confilename, "nwinter.con");
+        printf("Expansion GRP loaded: using external nwinter.con\n");
+        return;
+    }
+}
 
 static int load_duke3d_groupfile(void)
 {
 	// FIX_00032: Added multi base GRP manager. Use duke3d*.grp to handle multiple grp.
 
-	char  groupfilefullpath[512];
-    groupfilefullpath[0] = '\0';
+	char groupfilefullpath[512];
+	const rg_app_t *app = rg_system_get_app();
 
-    findGRPToUse(groupfilefullpath);
+	if (app && app->romPath && app->romPath[0] != '\0' && rg_extension_match(app->romPath, "zip"))
+	{
+		void *grp_data = NULL;
+		size_t grp_size = 0;
 
-    if (groupfilefullpath[0] == '\0')
-    {
-        return false;
-    }
+		if (!rg_storage_unzip_file(app->romPath, NULL, &grp_data, &grp_size, 0))
+			Error(EXIT_SUCCESS, "Unable to unzip ROM archive: %s\n", app->romPath);
+
+        const char *shortzip = app->romPath;
+        const char *pz1 = strrchr(app->romPath, '/');
+        const char *pz2 = strrchr(app->romPath, '\\');
+        if (pz1 || pz2) {
+            shortzip = (pz1 > pz2) ? pz1 + 1 : pz2 + 1;
+        }
+
+        if (is_expansion_grp(shortzip)) {
+            // Load base duke3d.grp first
+            initgroupfile(RG_BASE_PATH_ROMS "/duke3d/duke3d.grp");
+        }
+
+		if (initgroupfile_from_memory(app->romPath, grp_data, (int32_t)grp_size) == -1)
+		{
+			free(grp_data);
+			Error(EXIT_SUCCESS, "Unable to initialize GRP from ZIP ROM: %s\n", app->romPath);
+		}
+
+		RG_LOGI("Using Duke3D GRP extracted to RAM from ZIP: %s", app->romPath);
+        detect_and_set_confilename();
+		return true;
+	}
+
+	groupfilefullpath[0] = '\0';
+
+	findGRPToUse(groupfilefullpath);
+
+	if (groupfilefullpath[0] == '\0')
+	{
+		return false;
+	}
 
 	FixFilePath(groupfilefullpath);
 
-	return(initgroupfile(groupfilefullpath) != -1);
+    const char *shortname = groupfilefullpath;
+    const char *p1 = strrchr(groupfilefullpath, '/');
+    const char *p2 = strrchr(groupfilefullpath, '\\');
+    if (p1 || p2) {
+        shortname = (p1 > p2) ? p1 + 1 : p2 + 1;
+    }
+
+    if (is_expansion_grp(shortname)) {
+        // Load base duke3d.grp first
+        initgroupfile(RG_BASE_PATH_ROMS "/duke3d/duke3d.grp");
+    }
+
+    int res = (initgroupfile(groupfilefullpath) != -1);
+    if (res)
+    {
+        detect_and_set_confilename();
+    }
+    return res;
 }
 
 int main(int argc,char  **argv)
@@ -9530,10 +9784,7 @@ uint8_t  domovethings(void)
         if( multiwhat )
         {
 			// FIX_00058: Save/load game crash in both single and multiplayer
-            screencapt = 1;
-            displayrooms(myconnectindex,65536);
-            savetemp("duke3d.tmp",tiles[MAXTILES-1].data,160*100);
-            screencapt = 0;
+            capture_savegame_thumbnail();
 
             saveplayer( multipos );
             multiflag = 0;
@@ -9683,18 +9934,24 @@ uint8_t  domovethings(void)
     if( ud.pause_on == 0 )
     {
         movefta();//ST 2
+
         moveweapons();          //ST 5 (must be last)
+
         movetransports();       //ST 9
 
         moveplayers();          //ST 10
         movefallers();          //ST 12
+
         moveexplosions();       //ST 4
 
         moveactors();           //ST 1
+
         moveeffectors();        //ST 3
 
         movestandables();       //ST 6
+
         doanimations();
+
         movefx();               //ST 11
     }
 
@@ -9704,9 +9961,9 @@ uint8_t  domovethings(void)
     {
         animatewalls();
         movecyclers();
+
         pan3dsound();
     }
-
 
     return 0;
 }
@@ -10656,8 +10913,7 @@ void takescreenshot(void)
 	strcat(text, ".bmp");
 
     char name_no_ext[512];
-    strncpy(name_no_ext, text, sizeof(name_no_ext));
-    name_no_ext[sizeof(name_no_ext) - 1] = '\0';
+    copy_string_bounded(name_no_ext, sizeof(name_no_ext), text);
     char *dot = strrchr(name_no_ext, '.');
     if (dot && strcasecmp(dot, ".bmp") == 0) *dot = '\0';
 
@@ -10667,12 +10923,12 @@ void takescreenshot(void)
     char *path = rg_emu_get_path(RG_PATH_SCREENSHOT, name_with_dir);
     if (path)
     {
-        strncpy(szFilename, path, sizeof(szFilename));
+        copy_string_bounded(szFilename, sizeof(szFilename), path);
         free(path);
     }
     else
     {
-        snprintf(szFilename, sizeof(szFilename), "/sd/retro-go/saves/duke3d/%s", text);
+        snprintf(szFilename, sizeof(szFilename), RG_BASE_PATH_SAVES "/duke3d/%s", text);
     }
 
 	if(SafeFileExists(szFilename) == 0) // returns 1 if exists, 0 if not
@@ -10944,5 +11200,3 @@ Programming:   ( the functions I need )
 // Bog
 // Test Blimp respawn
 // move 1 in player???
-
-

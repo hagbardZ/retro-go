@@ -18,6 +18,10 @@
 #include "targets/martendo32-ips/config.h"
 #elif defined(RG_TARGET_MARTENDO32)
 #include "targets/martendo32/config.h"
+#elif defined(RG_TARGET_MARTENDO32_IPS_HDMI)
+#include "targets/martendo32-ips-hdmi/config.h"
+#elif defined(RG_TARGET_MARTENDO32_HDMI)
+#include "targets/martendo32-hdmi/config.h"
 #elif defined(RG_TARGET_MRGC_G32)
 #include "targets/mrgc-g32/config.h"
 #elif defined(RG_TARGET_MRGC_GBM)

@@ -229,6 +229,7 @@ extern void processinput(short snum);
 extern void cmenu(short cm);
 //#line "menues.c" 38
 extern void savetemp(char  *fn,uint8_t* daptr,int32_t dasiz);
+extern uint8_t capture_savegame_thumbnail(void);
 //#line "menues.c" 49
 extern void getangplayers(short snum);
 //#line "menues.c" 67
@@ -398,6 +399,7 @@ extern short spawn(short j,short pn);
 //#line "game.c" 4181
 extern void animatesprites(int32_t x,int32_t y,short a,int32_t smoothratio);
 //#line "game.c" 4859
+extern void activate_cheat(int k);
 extern void cheats(void );
 //#line "game.c" 5303
 extern void nonsharedkeys(void );
