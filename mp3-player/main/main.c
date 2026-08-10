@@ -42,11 +42,40 @@ static int sample_rate;
 static uint64_t playback_frames;
 static size_t mp3_file_size;
 static size_t mp3_id3_skip_bytes;
-static int mp3_bitrate_bps;
 static bool mp3_has_duration;
 static int mp3_skip_frames;
-static uint64_t mp3_resume_byte;
 static int64_t last_session_save_ms;
+static bool mp3_anchor_pending;
+static uint64_t mp3_anchor_seconds;
+
+/* Parsed MP3 metadata used for accurate duration and seeking. For VBR files
+ * the first frame's bitrate is meaningless, so we prefer the Xing/Info VBR
+ * header (exact frame count + optional 100-entry seek TOC) and fall back to
+ * sampling the bitrate across the file. */
+#define MP3_SAMPLE_POINTS 8
+#define MP3_TOC_SIZE 100
+
+typedef struct {
+    int v;             /* compact version: 0=MPEG2.5, 1=MPEG2, 2=MPEG1 */
+    int bitrate;       /* bps */
+    int samplerate;
+    int channels;      /* 1 or 2 */
+    int padding;
+} mp3_frame_t;
+
+typedef struct {
+    bool has_xing;          /* Xing/Info header parsed successfully */
+    bool has_toc;           /* Xing TOC table present */
+    bool cbr;               /* constant bitrate */
+    uint32_t samplerate;
+    uint32_t samples_per_frame;
+    uint32_t frames;        /* total frames (0 if unknown) */
+    uint32_t audio_bytes;   /* audio payload bytes (0 if unknown) */
+    uint32_t avg_bitrate_bps;
+    uint8_t toc[MP3_TOC_SIZE];
+} mp3_meta_t;
+
+static mp3_meta_t mp3_meta;
 
 static char session_track[RG_PATH_MAX + 1];
 static uint64_t session_byte;
@@ -67,6 +96,310 @@ static char *picker_result = NULL;
 static bool advance_pending = false;
 
 static void save_session_request(void);
+static size_t mp3_total_seconds(void);
+
+/* Indexed by the 2-bit MPEG version field from the frame header
+ * (0=MPEG2.5, 2=MPEG2, 3=MPEG1) -> compact index used below. -1 is invalid. */
+static const int mp3_ver_map[4] = {0, -1, 1, 2};
+static const int mp3_samplerates[3][3] = {
+    {11025, 12000,  8000}, /* MPEG2.5 */
+    {22050, 24000, 16000}, /* MPEG2   */
+    {44100, 48000, 32000}, /* MPEG1   */
+};
+static const int mp3_bitrates_kbps[3][15] = {
+    {0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160}, /* MPEG2.5 */
+    {0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160}, /* MPEG2   */
+    {0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320}, /* MPEG1 */
+};
+static const int mp3_samples_per_frame[3] = {576, 576, 1152};
+/* Side info size used to locate the Xing/Info tag after the 4-byte frame
+ * header. Indexed [version][mono/stereo]. */
+static const int mp3_side_info[3][2] = {
+    {9, 17},  /* MPEG2.5 */
+    {9, 17},  /* MPEG2   */
+    {17, 32}, /* MPEG1   */
+};
+
+static bool mp3_parse_frame(const unsigned char *buf, mp3_frame_t *f)
+{
+    int ver_idx, layer, br_idx, sr_idx, chan_mode, v;
+
+    if (!f || !buf)
+        return false;
+    if (buf[0] != 0xFF || (buf[1] & 0xE0) != 0xE0)
+        return false;
+
+    ver_idx = (buf[1] >> 3) & 0x03;
+    layer = 4 - ((buf[1] >> 1) & 0x03);
+    br_idx = (buf[2] >> 4) & 0x0F;
+    sr_idx = (buf[2] >> 2) & 0x03;
+    chan_mode = (buf[3] >> 6) & 0x03;
+
+    if (ver_idx == 1 || layer != 3 || br_idx == 0 || br_idx == 15 || sr_idx == 3)
+        return false;
+
+    v = mp3_ver_map[ver_idx];
+    f->v = v;
+    f->bitrate = mp3_bitrates_kbps[v][br_idx] * 1000;
+    f->samplerate = mp3_samplerates[v][sr_idx];
+    f->channels = (chan_mode == 3) ? 1 : 2;
+    f->padding = (buf[2] >> 1) & 1;
+    return true;
+}
+
+static uint32_t mp3_get_be32(const unsigned char *p)
+{
+    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
+           ((uint32_t)p[2] << 8) | (uint32_t)p[3];
+}
+
+/* Size of trailing tags (ID3v1, APEv2) that must not count as audio data. */
+static size_t mp3_trailing_bytes(void)
+{
+    uint8_t buf[128];
+    size_t n = 0;
+    long saved;
+
+    if (!mp3_file || mp3_file_size < 128)
+        return 0;
+
+    saved = ftell(mp3_file);
+    if (fseek(mp3_file, (long)(mp3_file_size - 128), SEEK_SET) == 0 &&
+        fread(buf, 1, 128, mp3_file) == 128 && memcmp(buf, "TAG", 3) == 0)
+        n += 128;
+    if (mp3_file_size >= n + 32 &&
+        fseek(mp3_file, (long)(mp3_file_size - n - 32), SEEK_SET) == 0 &&
+        fread(buf, 1, 32, mp3_file) == 32 && memcmp(buf, "APETAGEX", 8) == 0)
+    {
+        uint32_t size = mp3_get_be32(buf + 12);
+        n += size + 32; /* footer is not included in the size field */
+    }
+    fseek(mp3_file, saved, SEEK_SET);
+    return n;
+}
+
+/* Read up to 4KB at a byte offset and return the bitrate of the first valid
+ * frame header found there. Used to estimate the average bitrate of VBR files
+ * that lack a Xing header. */
+static int mp3_probe_bitrate_at(size_t offset, int expected_samplerate)
+{
+    static uint8_t probe_buf[4096];
+    size_t want, got, i;
+    long saved;
+
+    if (!mp3_file || offset >= mp3_file_size)
+        return 0;
+
+    want = sizeof(probe_buf);
+    if (mp3_file_size - offset < want)
+        want = mp3_file_size - offset;
+    if (want < 4)
+        return 0;
+
+    saved = ftell(mp3_file);
+    if (fseek(mp3_file, (long)offset, SEEK_SET) != 0)
+        return 0;
+    got = fread(probe_buf, 1, want, mp3_file);
+    fseek(mp3_file, saved, SEEK_SET);
+    if (got < 4)
+        return 0;
+
+    for (i = 0; i + 4 <= got; i++)
+    {
+        mp3_frame_t f;
+        if (mp3_parse_frame(probe_buf + i, &f) && f.samplerate == expected_samplerate)
+            return f.bitrate;
+    }
+    return 0;
+}
+
+/* Parse the first frame's Xing/Info VBR header and, if absent, sample the
+ * bitrate across the file so total duration / seeking is accurate for VBR. */
+static void mp3_analyze(void)
+{
+    mp3_frame_t first;
+    const unsigned char *frame = mp3_input_ptr;
+    size_t avail, side, i;
+    uint64_t audio_bytes;
+    double recip_sum;
+    int count = 0, min_br = 0, max_br = 0;
+
+    if (!frame || !mp3_parse_frame(frame, &first))
+        return;
+
+    mp3_meta.samplerate = first.samplerate;
+    mp3_meta.samples_per_frame = mp3_samples_per_frame[first.v];
+    mp3_meta.avg_bitrate_bps = first.bitrate;
+
+    if (mp3_file_size > mp3_id3_skip_bytes)
+        audio_bytes = (uint64_t)mp3_file_size - mp3_id3_skip_bytes - mp3_trailing_bytes();
+    else
+        audio_bytes = 0;
+
+    side = (size_t)mp3_side_info[first.v][first.channels == 1 ? 0 : 1];
+    avail = (size_t)(mp3_stream + mp3_stream_fill - frame);
+
+    if (avail >= side + 16)
+    {
+        const unsigned char *xing = frame + 4 + side;
+        if (memcmp(xing, "Xing", 4) == 0 || memcmp(xing, "Info", 4) == 0)
+        {
+            uint32_t flags = mp3_get_be32(xing + 4);
+            const unsigned char *p = xing + 8;
+
+            if (flags & 1)
+            {
+                mp3_meta.frames = mp3_get_be32(p);
+                p += 4;
+            }
+            if (flags & 2)
+            {
+                mp3_meta.audio_bytes = mp3_get_be32(p);
+                p += 4;
+            }
+            if (flags & 4 && (size_t)(p - frame) + MP3_TOC_SIZE <= avail)
+            {
+                memcpy(mp3_meta.toc, p, MP3_TOC_SIZE);
+                mp3_meta.has_toc = true;
+            }
+
+            if (mp3_meta.frames > 0)
+            {
+                mp3_meta.has_xing = true;
+                mp3_meta.cbr = (memcmp(xing, "Info", 4) == 0);
+                if (mp3_meta.audio_bytes == 0 || mp3_meta.audio_bytes > (uint64_t)mp3_file_size)
+                    mp3_meta.audio_bytes = (uint32_t)audio_bytes;
+                uint64_t total_sec = (uint64_t)mp3_meta.frames * mp3_meta.samples_per_frame / mp3_meta.samplerate;
+                if (total_sec > 0 && mp3_meta.audio_bytes > 0)
+                    mp3_meta.avg_bitrate_bps = (uint32_t)((uint64_t)mp3_meta.audio_bytes * 8 / total_sec);
+                RG_LOGI("mp3_analyze: Xing %s frames=%u bytes=%u toc=%d samplerate=%u",
+                        mp3_meta.cbr ? "Info" : "VBR", (unsigned int)mp3_meta.frames,
+                        (unsigned int)mp3_meta.audio_bytes, mp3_meta.has_toc, (unsigned int)mp3_meta.samplerate);
+                return;
+            }
+        }
+    }
+
+    /* No usable Xing header: sample bitrates to tell CBR from VBR and estimate
+     * the average. We sample at byte offsets, so frames are hit with probability
+     * proportional to their size (i.e. their bitrate). For such biased samples
+     * the harmonic mean converges to the correct byte-weighted average bitrate
+     * (total bytes / total time), which is what we need for the duration. */
+    min_br = max_br = first.bitrate;
+    recip_sum = 1.0 / (double)first.bitrate;
+    count = 1;
+    if (audio_bytes > 0)
+    {
+        for (i = 1; i <= MP3_SAMPLE_POINTS; i++)
+        {
+            size_t off = mp3_id3_skip_bytes + (size_t)(audio_bytes * i / (MP3_SAMPLE_POINTS + 1));
+            int br = mp3_probe_bitrate_at(off, first.samplerate);
+            if (br > 0)
+            {
+                recip_sum += 1.0 / (double)br;
+                count++;
+                if (br < min_br)
+                    min_br = br;
+                if (br > max_br)
+                    max_br = br;
+            }
+        }
+    }
+    mp3_meta.cbr = (count > 0 && min_br == max_br);
+    mp3_meta.avg_bitrate_bps = recip_sum > 0.0 ? (uint32_t)((double)count / recip_sum) : first.bitrate;
+    mp3_meta.audio_bytes = (uint32_t)audio_bytes;
+    RG_LOGI("mp3_analyze: no Xing, %s avg_bitrate=%u samples=%d", mp3_meta.cbr ? "CBR" : "VBR",
+            (unsigned int)mp3_meta.avg_bitrate_bps, count);
+}
+
+static uint64_t mp3_audio_bytes(void)
+{
+    if (mp3_meta.audio_bytes > 0)
+        return mp3_meta.audio_bytes;
+    if (mp3_file_size > mp3_id3_skip_bytes)
+        return (uint64_t)mp3_file_size - mp3_id3_skip_bytes;
+    return 0;
+}
+
+/* Map a seek time to an absolute byte offset. Uses the Xing TOC table when
+ * available (accurate for VBR), otherwise a linear byte/time mapping. */
+static size_t mp3_time_to_byte(size_t seconds)
+{
+    uint64_t total = mp3_total_seconds();
+    uint64_t audio = mp3_audio_bytes();
+    double frac, byte_frac;
+
+    if (total == 0 || audio == 0)
+        return mp3_id3_skip_bytes;
+    if (seconds > total)
+        seconds = (size_t)total;
+
+    frac = (double)seconds / (double)total;
+    byte_frac = frac;
+
+    if (mp3_meta.has_toc)
+    {
+        double p = frac * 100.0;
+        if (p <= 0.0)
+            byte_frac = 0.0;
+        else if (p >= 100.0)
+            byte_frac = 1.0;
+        else if (p < 1.0)
+            byte_frac = mp3_meta.toc[0] / 256.0;
+        else
+        {
+            int idx = (int)p; /* 1..99 */
+            double f = p - idx;
+            double lo = mp3_meta.toc[idx - 1] / 256.0;
+            double hi = mp3_meta.toc[idx] / 256.0;
+            byte_frac = lo + (hi - lo) * f;
+        }
+    }
+
+    return mp3_id3_skip_bytes + (size_t)(byte_frac * (double)audio);
+}
+
+/* Map an absolute byte offset to a play time (inverse of mp3_time_to_byte). */
+static size_t mp3_byte_to_time(size_t byte)
+{
+    uint64_t total = mp3_total_seconds();
+    uint64_t audio = mp3_audio_bytes();
+    double byte_frac, t_frac;
+
+    if (total == 0 || audio == 0 || byte <= mp3_id3_skip_bytes)
+        return 0;
+    if (byte >= mp3_id3_skip_bytes + audio)
+        return (size_t)total;
+
+    byte_frac = (double)(byte - mp3_id3_skip_bytes) / (double)audio;
+    t_frac = byte_frac;
+
+    if (mp3_meta.has_toc)
+    {
+        double x = byte_frac * 256.0;
+        if (x <= mp3_meta.toc[0])
+            t_frac = mp3_meta.toc[0] > 0 ? (x / mp3_meta.toc[0]) / 100.0 : 0.0;
+        else
+        {
+            int idx = 1;
+            for (; idx < MP3_TOC_SIZE; idx++)
+            {
+                if (x <= mp3_meta.toc[idx])
+                {
+                    double lo = mp3_meta.toc[idx - 1];
+                    double hi = mp3_meta.toc[idx];
+                    double f = (hi > lo) ? (x - lo) / (hi - lo) : 0.0;
+                    t_frac = (idx + f) / 100.0;
+                    break;
+                }
+            }
+            if (idx >= MP3_TOC_SIZE)
+                t_frac = 1.0;
+        }
+    }
+
+    return (size_t)(t_frac * (double)total);
+}
 
 static void draw_text_centered(int y, const char *text)
 {
@@ -322,9 +655,11 @@ static bool open_mp3(const char *path)
     }
 
     playback_frames = 0;
-    mp3_bitrate_bps = 0;
     mp3_has_duration = false;
     mp3_skip_frames = 0;
+
+    memset(&mp3_meta, 0, sizeof(mp3_meta));
+    mp3_analyze();
 
     strncpy(current_file, path, sizeof(current_file) - 1);
     current_file[sizeof(current_file) - 1] = '\0';
@@ -455,19 +790,12 @@ static bool decode_and_play(void)
             rg_audio_set_sample_rate(sample_rate);
         }
 
-        if (!mp3_bitrate_bps && info.bitrate > 0)
+        /* Now that the real sample rate is known, apply the pending playhead
+         * anchor (set by seek_mp3_to_byte) so elapsed time stays accurate. */
+        if (mp3_anchor_pending)
         {
-            mp3_bitrate_bps = info.bitrate;
-            if (mp3_resume_byte > 0)
-            {
-                uint64_t resume_byte = mp3_resume_byte;
-                mp3_resume_byte = 0;
-                if (resume_byte > mp3_id3_skip_bytes)
-                    resume_byte -= mp3_id3_skip_bytes;
-                else
-                    resume_byte = 0;
-                playback_frames = (resume_byte * 8 / (uint64_t)info.bitrate) * (uint64_t)info.samprate;
-            }
+            mp3_anchor_pending = false;
+            playback_frames = mp3_anchor_seconds * (uint64_t)sample_rate;
         }
 
         if (info.outputSamps <= 0)
@@ -526,13 +854,19 @@ static void format_time(char *buffer, size_t size, uint32_t seconds)
 
 static size_t mp3_total_seconds(void)
 {
-    if (mp3_bitrate_bps <= 0 || mp3_file_size <= mp3_id3_skip_bytes)
-        return 0;
+    uint64_t total = 0;
 
-    uint64_t data_bytes = (uint64_t)mp3_file_size - mp3_id3_skip_bytes;
-    uint64_t bitrate_bps = (uint64_t)mp3_bitrate_bps;
-    mp3_has_duration = true;
-    return (size_t)((data_bytes * 8 + bitrate_bps - 1) / bitrate_bps);
+    if (mp3_meta.has_xing && mp3_meta.frames > 0 && mp3_meta.samplerate > 0)
+        total = (uint64_t)mp3_meta.frames * mp3_meta.samples_per_frame / mp3_meta.samplerate;
+    else if (mp3_meta.avg_bitrate_bps > 0)
+    {
+        uint64_t audio = mp3_audio_bytes();
+        if (audio > 0)
+            total = (audio * 8 + mp3_meta.avg_bitrate_bps - 1) / mp3_meta.avg_bitrate_bps;
+    }
+
+    mp3_has_duration = (total > 0);
+    return (size_t)total;
 }
 
 static size_t mp3_current_seconds(void)
@@ -643,6 +977,17 @@ static bool seek_mp3_to_byte(size_t target_byte)
     }
 
     mp3_skip_frames = MP3_PRIME_FRAMES;
+
+    /* Anchor the playhead to the byte position where playback actually resumes
+     * so the elapsed time and subsequent relative seeks stay accurate (esp. VBR).
+     * The anchor seconds is applied with the actual sample rate once the first
+     * frame after the seek has been decoded (rate unknown right after resume). */
+    uint64_t resume_byte = (uint64_t)mp3_stream_offset + (uint64_t)(mp3_input_ptr - mp3_stream);
+    mp3_anchor_seconds = mp3_byte_to_time((size_t)resume_byte);
+    mp3_anchor_pending = true;
+    uint64_t rate = (sample_rate > 0) ? (uint64_t)sample_rate : AUDIO_SAMPLE_RATE;
+    playback_frames = mp3_anchor_seconds * rate;
+    RG_LOGI("seek_mp3_to_byte: anchored resume_byte=%u resume_sec=%u", (unsigned int)resume_byte, (unsigned int)mp3_anchor_seconds);
     return true;
 }
 
@@ -651,35 +996,21 @@ static bool mp3_seek_to_time(size_t seek_seconds)
     size_t total = mp3_total_seconds();
     if (total == 0 || mp3_file_size == 0)
     {
-        RG_LOGE("seek_to_time: FAIL total=%u filesize=%u bitrate=%d", (unsigned int)total, (unsigned int)mp3_file_size, mp3_bitrate_bps);
+        RG_LOGE("seek_to_time: FAIL total=%u filesize=%u", (unsigned int)total, (unsigned int)mp3_file_size);
         return false;
     }
 
     if (seek_seconds > total)
         seek_seconds = total;
 
-    uint64_t data_bytes = (uint64_t)mp3_file_size - mp3_id3_skip_bytes;
-    uint64_t target_byte = mp3_id3_skip_bytes + (data_bytes * seek_seconds) / total;
+    size_t target_byte = mp3_time_to_byte(seek_seconds);
     RG_LOGI("seek_to_time: want=%us total=%us target_byte=%u", (unsigned int)seek_seconds, (unsigned int)total, (unsigned int)target_byte);
-    if (!seek_mp3_to_byte((size_t)target_byte))
+    if (!seek_mp3_to_byte(target_byte))
     {
         RG_LOGE("seek_to_time: seek_mp3_to_byte FAILED at byte %u", (unsigned int)target_byte);
         return false;
     }
-
-    /* Anchor the playhead to the byte position where playback actually resumes
-     * so the elapsed time and subsequent relative seeks stay accurate (esp. VBR). */
-    uint64_t resume_bytes = (uint64_t)mp3_stream_offset + (uint64_t)(mp3_input_ptr - mp3_stream);
-    if (resume_bytes > mp3_id3_skip_bytes)
-        resume_bytes -= mp3_id3_skip_bytes;
-    else
-        resume_bytes = 0;
-
-    uint64_t bitrate_bps = (uint64_t)mp3_bitrate_bps;
-    uint64_t rate = (sample_rate > 0) ? (uint64_t)sample_rate : AUDIO_SAMPLE_RATE;
-    uint64_t resume_seconds = bitrate_bps > 0 ? (resume_bytes * 8) / bitrate_bps : seek_seconds;
-    playback_frames = resume_seconds * rate;
-    RG_LOGI("seek_to_time: OK resume_byte=%u resume_sec=%u rate=%u", (unsigned int)resume_bytes, (unsigned int)resume_seconds, (unsigned int)rate);
+    RG_LOGI("seek_to_time: OK resume_sec=%u rate=%u", (unsigned int)mp3_current_seconds(), (unsigned int)sample_rate);
     return true;
 }
 
@@ -1215,8 +1546,8 @@ void app_main(void)
         if (open_mp3(last_track))
         {
             set_playlist_index(last_track);
-            if (last_byte > 0 && seek_mp3_to_byte((size_t)last_byte))
-                mp3_resume_byte = (uint64_t)mp3_stream_offset + (uint64_t)(mp3_input_ptr - mp3_stream);
+            if (last_byte > 0)
+                seek_mp3_to_byte((size_t)last_byte);
             playing = true;
             draw_state();
             play_loop();
