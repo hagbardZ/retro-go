@@ -39,6 +39,7 @@ static bool mp3_stream_eof = false;
 static char current_file[RG_PATH_MAX];
 static bool playing;
 static int sample_rate;
+static int mp3_current_bitrate;
 static uint64_t playback_frames;
 static size_t mp3_file_size;
 static size_t mp3_id3_skip_bytes;
@@ -783,6 +784,8 @@ static bool decode_and_play(void)
 
         MP3FrameInfo info = {0};
         MP3GetLastFrameInfo(mp3_decoder, &info);
+        if (info.bitrate > 0)
+            mp3_current_bitrate = info.bitrate;
         if (info.samprate > 0 && info.samprate != sample_rate)
         {
             RG_LOGI("decode_and_play: sample rate %d -> %d", sample_rate, info.samprate);
@@ -1102,7 +1105,7 @@ static bool draw_state(void)
     rg_gui_draw_text(RG_GUI_CENTER, 16, 0, buffer, C_WHITE, C_BLACK, RG_TEXT_ALIGN_CENTER);
     snprintf(buffer, sizeof(buffer), "Playback: %s", playing ? "Playing" : "Stopped");
     rg_gui_draw_text(RG_GUI_CENTER, 44, 0, buffer, C_WHITE, C_BLACK, RG_TEXT_ALIGN_CENTER);
-    snprintf(buffer, sizeof(buffer), "Audio: %dHz/%s Vol: %d%%", sample_rate, driver ?driver : "Unknown", rg_audio_get_volume());
+    snprintf(buffer, sizeof(buffer), "Audio: %dHz/%s Vol: %d%% Bitrate: %dkbps", sample_rate, driver ?driver : "Unknown", rg_audio_get_volume(), mp3_current_bitrate / 1000);
     rg_gui_draw_text(RG_GUI_CENTER, 72, 0, buffer, C_WHITE, C_BLACK, RG_TEXT_ALIGN_CENTER);
     draw_progress_bar(110);
     if (playlist_count > 0 && playlist_index >= 0)
