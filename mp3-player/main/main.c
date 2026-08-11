@@ -1449,7 +1449,7 @@ static bool draw_state(void)
     rg_gui_draw_text(RG_GUI_CENTER, 16, 0, buffer, C_INDIGO, C_YELLOW_GREEN, RG_TEXT_ALIGN_CENTER);
 
     format_title(buffer, sizeof(buffer));
-    rg_gui_draw_text(RG_GUI_CENTER, 30, 0, buffer, C_WHITE, C_BLACK, RG_TEXT_ALIGN_CENTER);
+    rg_gui_draw_text(RG_GUI_CENTER, 34, 0, buffer, C_WHITE, C_BLACK, RG_TEXT_ALIGN_CENTER);
 
 // Tag info
 
