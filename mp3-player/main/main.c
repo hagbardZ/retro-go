@@ -21,7 +21,7 @@
 #define AUDIO_BUFFER_BYTES (AUDIO_BUFFER_SAMPLES * sizeof(rg_audio_frame_t))
 #define MP3_STREAM_BUFFER_SIZE 32768
 #define MP3_PRIME_FRAMES 2
-#define MAX_TRACKS 256
+#define PLAYLIST_INITIAL_CAPACITY 256
 #define MUSIC_PATH RG_BASE_PATH_ROMS "/music"
 
 static rg_app_t *app;
@@ -40,6 +40,7 @@ static char current_file[RG_PATH_MAX];
 static bool playing;
 static int sample_rate;
 static int mp3_current_bitrate;
+
 static uint64_t playback_frames;
 static size_t mp3_file_size;
 static size_t mp3_id3_skip_bytes;
@@ -48,6 +49,14 @@ static int mp3_skip_frames;
 static int64_t last_session_save_ms;
 static bool mp3_anchor_pending;
 static uint64_t mp3_anchor_seconds;
+
+/* ID3v2 tag metadata shown on the player screen. */
+#define TAG_TEXT_MAX 128
+static char tag_artist[TAG_TEXT_MAX];
+static char tag_title[TAG_TEXT_MAX];
+static char tag_album[TAG_TEXT_MAX];
+static char tag_year[TAG_TEXT_MAX];
+static char tag_genre[TAG_TEXT_MAX];
 
 /* Parsed MP3 metadata used for accurate duration and seeking. For VBR files
  * the first frame's bitrate is meaningless, so we prefer the Xing/Info VBR
@@ -85,8 +94,9 @@ static bool session_repeat;
 static volatile bool session_dirty;
 static volatile bool session_saving;
 
-static char playlist[MAX_TRACKS][RG_PATH_MAX + 1];
+static char (*playlist)[RG_PATH_MAX + 1] = NULL;
 static int playlist_count = 0;
+static int playlist_capacity = 0;
 static int playlist_index = -1;
 static bool random_mode = false;
 static bool repeat_mode = false;
@@ -313,6 +323,232 @@ static void mp3_analyze(void)
             (unsigned int)mp3_meta.avg_bitrate_bps, count);
 }
 
+/* Decode an ID3v2 text frame body into a UTF-8 NUL-terminated string.
+ * Handles ISO-8859-1, UTF-8 and UTF-16 (with/without BOM) encodings. */
+static size_t id3_decode_text(const uint8_t *data, size_t len, char *out, size_t out_size)
+{
+    int enc;
+    size_t i, o = 0;
+
+    out[0] = '\0';
+    if (!data || len < 1 || out_size < 2)
+        return 0;
+
+    enc = data[0];
+    i = 1;
+
+    if (enc == 1 && len >= 3 && ((data[1] == 0xFF && data[2] == 0xFE) || (data[1] == 0xFE && data[2] == 0xFF)))
+    {
+        /* UTF-16 with BOM: FF FE = little-endian, FE FF = big-endian */
+        enc = (data[1] == 0xFF && data[2] == 0xFE) ? 1 : 2;
+        i = 3;
+    }
+
+    while (i < len && o + 4 < out_size)
+    {
+        int cp;
+
+        if (enc == 0)
+        {
+            /* ISO-8859-1 maps 1:1 to Unicode code points */
+            uint8_t c = data[i++];
+            if (c == 0)
+                break;
+            cp = c;
+        }
+        else if (enc == 3)
+        {
+            /* UTF-8 */
+            uint8_t c = data[i];
+            size_t need = 1;
+            if (c == 0)
+                break;
+            if ((c & 0xE0) == 0xC0)
+                need = 2;
+            else if ((c & 0xF0) == 0xE0)
+                need = 3;
+            else if ((c & 0xF8) == 0xF0)
+                need = 4;
+            if (i + need > len)
+            {
+                out[o++] = c;
+                i++;
+                continue;
+            }
+            const char *p = (const char *)&data[i];
+            const char *p2 = p;
+            cp = rg_utf8_decode(&p2);
+            if (cp < 0 || p2 == p)
+            {
+                out[o++] = c; /* invalid sequence, copy the byte verbatim */
+                i++;
+                continue;
+            }
+            i += (size_t)(p2 - p);
+        }
+        else
+        {
+            /* UTF-16 little-endian (enc==1) or big-endian (enc==2) */
+            uint16_t w;
+            if (i + 2 > len)
+                break;
+            w = (enc == 2) ? (uint16_t)((data[i] << 8) | data[i + 1])
+                           : (uint16_t)(data[i] | (data[i + 1] << 8));
+            i += 2;
+            if (w == 0)
+                break;
+            if (w >= 0xD800 && w <= 0xDBFF && i + 2 <= len)
+            {
+                uint16_t w2 = (enc == 2) ? (uint16_t)((data[i] << 8) | data[i + 1])
+                                         : (uint16_t)(data[i] | (data[i + 1] << 8));
+                if (w2 >= 0xDC00 && w2 <= 0xDFFF)
+                {
+                    cp = 0x10000 + ((w - 0xD800) << 10) + (w2 - 0xDC00);
+                    i += 2;
+                }
+                else
+                    cp = 0xFFFD;
+            }
+            else if (w >= 0xD800 && w <= 0xDFFF)
+                cp = 0xFFFD;
+            else
+                cp = w;
+        }
+
+        o += rg_utf8_encode(out + o, cp);
+    }
+    out[o] = '\0';
+
+    /* Trim trailing whitespace */
+    while (o > 0 && (out[o - 1] == ' ' || out[o - 1] == '\t'))
+        out[--o] = '\0';
+    return o;
+}
+
+/* Standard ID3v1 genre names, indexed by the numeric genre code that ID3v2
+ * TCON frames sometimes carry ("(17)" or "17"). */
+static const char *const id3v1_genres[] = {
+    "Blues", "Classic Rock", "Country", "Dance", "Disco", "Funk", "Grunge", "Hip-Hop",
+    "Jazz", "Metal", "New Age", "Oldies", "Other", "Pop", "R&B", "Rap", "Reggae", "Rock",
+    "Techno", "Industrial", "Alternative", "Ska", "Death Metal", "Pranks", "Soundtrack",
+    "Euro-Techno", "Ambient", "Trip-Hop", "Vocal", "Jazz+Funk", "Fusion", "Trance",
+    "Classical", "Instrumental", "Acid", "House", "Game", "Sound Clip", "Gospel", "Noise",
+    "AlternRock", "Bass", "Soul", "Punk", "Space", "Meditative", "Instrumental Pop",
+    "Instrumental Rock", "Ethnic", "Gothic", "Darkwave", "Techno-Industrial", "Electronic",
+    "Pop-Folk", "Eurodance", "Dream", "Southern Rock", "Comedy", "Cult", "Gangsta", "Top 40",
+    "Christian Rap", "Pop/Funk", "Jungle", "Native American", "Cabaret", "New Wave",
+    "Psychadelic", "Rave", "Showtunes", "Trailer", "Lo-Fi", "Tribal", "Acid Punk", "Acid Jazz",
+    "Polka", "Retro", "Musical", "Rock & Roll", "Hard Rock", "Folk", "Folk-Rock",
+    "National Folk", "Swing", "Fast Fusion", "Bebob", "Latin", "Revival", "Celtic", "Bluegrass",
+    "Avantgarde", "Gothic Rock", "Progressive Rock", "Psychedelic Rock", "Symphonic Rock",
+    "Slow Rock", "Big Band", "Chorus", "Easy Listening", "Acoustic", "Humour", "Speech",
+    "Chanson", "Opera", "Chamber Music", "Sonata", "Symphony", "Booty Bass", "Primus",
+    "Porn Groove", "Satire", "Slow Jam", "Club", "Tango", "Samba", "Folklore", "Ballad",
+    "Power Ballad", "Rhythmic Soul", "Freestyle", "Duet", "Punk Rock", "Drum Solo", "A capella",
+    "Euro-House", "Dance Hall", "Goa", "Drum & Bass", "Club-House", "Hardcore", "Terror",
+    "Indie", "BritPop", "Negerpunk", "Polsk Punk", "Beat", "Christian Gangsta Rap",
+    "Heavy Metal", "Black Metal", "Crossover", "Contemporary Christian", "Christian Rock",
+    "Merengue", "Salsa", "Thrash Metal", "Anime", "JPop", "Synthpop",
+};
+
+/* Parse the ID3v2 tag in buf (starting at "ID3") and fill the tag_* globals.
+ * Supports ID3v2.2, v2.3 and v2.4 frames. */
+static void mp3_parse_id3v2(const uint8_t *buf, size_t size)
+{
+    size_t pos, end;
+    int major;
+
+    tag_artist[0] = tag_title[0] = tag_album[0] = tag_year[0] = tag_genre[0] = '\0';
+
+    if (!buf || size < 10 || memcmp(buf, "ID3", 3) != 0)
+        return;
+
+    major = buf[3];
+    end = 10 + (((size_t)(buf[6] & 0x7F) << 21) | ((size_t)(buf[7] & 0x7F) << 14) |
+                ((size_t)(buf[8] & 0x7F) << 7) | (size_t)(buf[9] & 0x7F));
+    if (end > size)
+        end = size;
+    pos = 10;
+
+    while (pos + 6 <= end)
+    {
+        const uint8_t *frame = buf + pos;
+        char frame_id[5];
+        size_t body_len, hdr;
+
+        if (frame[0] == 0)
+            break; /* padding */
+
+        if (major >= 3)
+        {
+            if (pos + 10 > end)
+                break;
+            memcpy(frame_id, frame, 4);
+            frame_id[4] = '\0';
+            if (major == 3)
+                body_len = ((size_t)frame[4] << 24) | ((size_t)frame[5] << 16) |
+                           ((size_t)frame[6] << 8) | frame[7];
+            else
+                body_len = ((size_t)(frame[4] & 0x7F) << 21) | ((size_t)(frame[5] & 0x7F) << 14) |
+                           ((size_t)(frame[6] & 0x7F) << 7) | (frame[7] & 0x7F);
+            hdr = 10;
+        }
+        else
+        {
+            /* ID3v2.2: 3-byte frame id + 3-byte big-endian size */
+            memcpy(frame_id, frame, 3);
+            frame_id[3] = '\0';
+            body_len = ((size_t)frame[3] << 16) | ((size_t)frame[4] << 8) | frame[5];
+            hdr = 6;
+        }
+
+        if (pos + hdr + body_len > end)
+            body_len = end - (pos + hdr);
+
+        {
+            const uint8_t *body = frame + hdr;
+
+            if (strcmp(frame_id, "TPE1") == 0 || strcmp(frame_id, "TP1") == 0)
+                id3_decode_text(body, body_len, tag_artist, TAG_TEXT_MAX);
+            else if (strcmp(frame_id, "TIT2") == 0 || strcmp(frame_id, "TT2") == 0)
+                id3_decode_text(body, body_len, tag_title, TAG_TEXT_MAX);
+            else if (strcmp(frame_id, "TALB") == 0 || strcmp(frame_id, "TAL") == 0)
+                id3_decode_text(body, body_len, tag_album, TAG_TEXT_MAX);
+            else if (strcmp(frame_id, "TYER") == 0 || strcmp(frame_id, "TYE") == 0 ||
+                     strcmp(frame_id, "TDRC") == 0)
+                id3_decode_text(body, body_len, tag_year, TAG_TEXT_MAX);
+            else if (strcmp(frame_id, "TCON") == 0 || strcmp(frame_id, "TCO") == 0)
+                id3_decode_text(body, body_len, tag_genre, TAG_TEXT_MAX);
+        }
+
+        pos += hdr + body_len;
+    }
+
+    /* TDRC (ID3v2.4) is often a full ISO 8601 timestamp; keep just the year. */
+    if (tag_year[0] && tag_year[1] && tag_year[2] && tag_year[3] &&
+        tag_year[0] >= '0' && tag_year[0] <= '9' && tag_year[1] >= '0' && tag_year[1] <= '9' &&
+        tag_year[2] >= '0' && tag_year[2] <= '9' && tag_year[3] >= '0' && tag_year[3] <= '9')
+        tag_year[4] = '\0';
+
+    /* A numeric ID3v1 genre code ("17" or "(17)") becomes its genre name. */
+    if (tag_genre[0])
+    {
+        char *endptr;
+        const char *g = tag_genre;
+        long id;
+
+        if (g[0] == '(')
+            g++;
+        id = strtol(g, &endptr, 10);
+        if (endptr != g && *endptr == '\0' && id >= 0 &&
+            (size_t)id < sizeof(id3v1_genres) / sizeof(id3v1_genres[0]))
+            snprintf(tag_genre, sizeof(tag_genre), "%s", id3v1_genres[id]);
+    }
+
+    RG_LOGI("id3v2: artist='%s' title='%s' album='%s' year='%s' genre='%s'",
+            tag_artist, tag_title, tag_album, tag_year, tag_genre);
+}
+
 static uint64_t mp3_audio_bytes(void)
 {
     if (mp3_meta.audio_bytes > 0)
@@ -505,21 +741,7 @@ static bool refill_mp3_stream(void)
      * ~16ms audio DMA buffer starves playback (audible crackle on silence).
      * Read in smaller chunks so each stall stays well under the buffer. */
     size_t read_size = free_space > 8192 ? 8192 : free_space;
-    static int64_t last_refill_warn_ms = 0;
-    int64_t t0 = rg_system_timer();
     size_t read_bytes = fread(mp3_stream + mp3_input_left, 1, read_size, mp3_file);
-    int64_t read_us = rg_system_timer() - t0;
-    if (read_us > 8000)
-    {
-        int64_t now_ms = rg_system_timer() / 1000;
-        if (now_ms - last_refill_warn_ms >= 1000)
-        {
-            last_refill_warn_ms = now_ms;
-            RG_LOGW("refill: SD read blocked %u ms (%u/%u bytes) offset=%u in_left=%u",
-                    (unsigned int)(read_us / 1000), (unsigned int)read_bytes, (unsigned int)read_size,
-                    (unsigned int)mp3_stream_offset, (unsigned int)mp3_input_left);
-        }
-    }
     mp3_input_left += read_bytes;
     mp3_stream_fill = mp3_input_left;
     mp3_stream_eof = (read_bytes == 0);
@@ -598,6 +820,7 @@ static bool open_mp3(const char *path)
     RG_LOGD("open_mp3: initial eof=%d", mp3_stream_eof);
 
     mp3_id3_skip_bytes = 0;
+    tag_artist[0] = tag_title[0] = tag_album[0] = tag_year[0] = tag_genre[0] = '\0';
     if (mp3_stream_fill >= 10 && memcmp(mp3_stream, "ID3", 3) == 0)
     {
         size_t tag_size = ((mp3_stream[6] & 0x7F) << 21) |
@@ -609,6 +832,7 @@ static bool open_mp3(const char *path)
         mp3_id3_skip_bytes = skip_bytes;
         if (skip_bytes <= mp3_stream_fill)
         {
+            mp3_parse_id3v2(mp3_stream, skip_bytes);
             size_t remaining = mp3_stream_fill - skip_bytes;
             memmove(mp3_stream, mp3_stream + skip_bytes, remaining);
             mp3_stream_fill = remaining;
@@ -616,7 +840,20 @@ static bool open_mp3(const char *path)
         }
         else
         {
-            fseek(mp3_file, (long)(skip_bytes - mp3_stream_fill), SEEK_CUR);
+            size_t missing = skip_bytes - mp3_stream_fill;
+            uint8_t *tag_buf = malloc(skip_bytes);
+            if (tag_buf)
+            {
+                memcpy(tag_buf, mp3_stream, mp3_stream_fill);
+                size_t got = fread(tag_buf + mp3_stream_fill, 1, missing, mp3_file);
+                mp3_parse_id3v2(tag_buf, mp3_stream_fill + got);
+                free(tag_buf);
+                /* file pointer now sits right after the tag */
+            }
+            else
+            {
+                fseek(mp3_file, (long)missing, SEEK_CUR);
+            }
             mp3_stream_fill = 0;
         }
         mp3_input_ptr = mp3_stream;
@@ -675,8 +912,7 @@ static bool decode_and_play(void)
         return false;
     }
 
-    while (mp3_input_left < 2048 && !mp3_stream_eof)
-    {
+    while (mp3_input_left < 2048 && !mp3_stream_eof)    {
         if (!refill_mp3_stream())
         {
             RG_LOGE("decode_and_play: refill failed in header loop");
@@ -844,6 +1080,7 @@ static bool decode_and_play(void)
             refill_mp3_stream();
 
         rg_audio_submit(audio_buffer, frames);
+
         return true;
     }
 }
@@ -1066,29 +1303,66 @@ static void draw_progress_bar(size_t y)
         rg_gui_draw_rect(x + 1, y + 15, fill_width - 2, height - 2, 0, 0, C_GREEN);
 }
 
+/* Glyph widths of a string (no padding), matching rg_gui_draw_text's default font. */
+static int line_width(const char *s)
+{
+    int w = 0;
+    for (const char *p = s; *p;)
+        w += rg_gui_measure_char(rg_utf8_decode(&p));
+    return w;
+}
+
+/* Find the longest UTF-8-safe prefix of `v` whose glyph width fits in `avail`
+ * and write it to `buffer` after `label`, appending an ellipsis. */
+static void fit_value(char *buffer, size_t size, const char *label, const char *v, int avail)
+{
+    size_t prefix_len = 0;
+    int w = 0;
+    for (const char *p = v; *p;)
+    {
+        const char *next = p;
+        int cw = rg_gui_measure_char(rg_utf8_decode(&next));
+        if (w + cw > avail)
+            break;
+        w += cw;
+        p = next;
+        prefix_len = (size_t)(p - v);
+    }
+    if (prefix_len == 0)
+        snprintf(buffer, size, "%s...", label);
+    else
+        snprintf(buffer, size, "%s%.*s...", label, (int)prefix_len, v);
+}
+
 static void format_title(char *buffer, size_t size)
 {
     const char *base = rg_basename(current_file[0] ? current_file : "No file");
     const int max_width = rg_display_get_width() - 8;
+    const int padding = 2; /* Matches rg_gui_draw_text's default padding. */
 
     snprintf(buffer, size, "MP3: %s", base);
-    if (TEXT_RECT(buffer, 0).width <= max_width)
+    if (line_width(buffer) + padding <= max_width)
         return;
 
     /* The filename is too long to fit on one line. Shorten the basename
      * (without splitting UTF-8 sequences) and add an ellipsis so the title
      * is always centered and never overflows the screen. */
-    size_t base_len = strlen(base);
-    while (base_len > 0)
-    {
-        base_len--;
-        while (base_len > 0 && ((unsigned char)base[base_len] & 0xC0) == 0x80)
-            base_len--;
-        snprintf(buffer, size, "MP3: %.*s...", (int)base_len, base);
-        if (TEXT_RECT(buffer, 0).width <= max_width)
-            return;
-    }
-    snprintf(buffer, size, "MP3: ...");
+    fit_value(buffer, size, "MP3: ", base, max_width - padding - line_width("MP3: ") - line_width("..."));
+}
+
+/* Build "Label: value" for one tag field, truncating the value (without
+ * splitting UTF-8 sequences) so the line always fits on screen. */
+static void format_tag_line(char *buffer, size_t size, const char *label, const char *value)
+{
+    const char *v = (value && *value) ? value : "-";
+    const int max_width = rg_display_get_width() - 8;
+    const int padding = 2;
+
+    snprintf(buffer, size, "%s%s", label, v);
+    if (line_width(buffer) + padding <= max_width)
+        return;
+
+    fit_value(buffer, size, label, v, max_width - padding - line_width(label) - line_width("..."));
 }
 
 static bool draw_state(void)
@@ -1101,35 +1375,67 @@ static bool draw_state(void)
 
     rg_gui_set_surface(surface);
     rg_surface_fill(surface, NULL, C_BLACK);
-    format_title(buffer, sizeof(buffer));
+
+    snprintf(buffer, sizeof(buffer), "Audio: %dkbps/%dHz/%s Vol: %d%%  ", mp3_current_bitrate / 1000, sample_rate, driver ?driver : "Unknown", rg_audio_get_volume());
     rg_gui_draw_text(RG_GUI_CENTER, 16, 0, buffer, C_WHITE, C_BLACK, RG_TEXT_ALIGN_CENTER);
-    snprintf(buffer, sizeof(buffer), "Playback: %s", playing ? "Playing" : "Stopped");
-    rg_gui_draw_text(RG_GUI_CENTER, 44, 0, buffer, C_WHITE, C_BLACK, RG_TEXT_ALIGN_CENTER);
-    snprintf(buffer, sizeof(buffer), "Audio: %dHz/%s Vol: %d%% Bitrate: %dkbps", sample_rate, driver ?driver : "Unknown", rg_audio_get_volume(), mp3_current_bitrate / 1000);
-    rg_gui_draw_text(RG_GUI_CENTER, 72, 0, buffer, C_WHITE, C_BLACK, RG_TEXT_ALIGN_CENTER);
-    draw_progress_bar(110);
+
+    format_title(buffer, sizeof(buffer));
+    rg_gui_draw_text(RG_GUI_CENTER, 30, 0, buffer, C_WHITE, C_BLACK, RG_TEXT_ALIGN_CENTER);
+
+// Tag info
+
+    format_tag_line(buffer, sizeof(buffer), "Artist: ", tag_artist);
+    rg_gui_draw_text(RG_GUI_LEFT, 64, 0, buffer, C_LIGHT_CORAL, C_BLACK, RG_TEXT_ALIGN_RIGHT);
+    format_tag_line(buffer, sizeof(buffer), "Title:  ", tag_title);
+    rg_gui_draw_text(RG_GUI_LEFT, 80, 0, buffer, C_POWDER_BLUE, C_BLACK, RG_TEXT_ALIGN_CENTER);
+    format_tag_line(buffer, sizeof(buffer), "Album:  ", tag_album);
+    rg_gui_draw_text(RG_GUI_LEFT, 96, 0, buffer, C_LIGHT_YELLOW, C_BLACK, RG_TEXT_ALIGN_LEFT);
+    format_tag_line(buffer, sizeof(buffer), "Year:   ", tag_year);
+    rg_gui_draw_text(RG_GUI_LEFT, 112, 0, buffer, C_LIME_GREEN, C_BLACK, RG_TEXT_ALIGN_LEFT);
+    format_tag_line(buffer, sizeof(buffer), "Genre:  ", tag_genre);
+    rg_gui_draw_text(RG_GUI_LEFT, 128, 0, buffer, C_YELLOW_GREEN, C_BLACK, RG_TEXT_ALIGN_LEFT);
+
+
+
+
+    draw_progress_bar(158);
+
     if (playlist_count > 0 && playlist_index >= 0)
         snprintf(buffer, sizeof(buffer), "Track: %d/%d %s%s", playlist_index + 1, playlist_count, random_mode ? "Random: ON" : "Random: OFF", repeat_mode ? " Repeat: ON" : "");
     else
         snprintf(buffer, sizeof(buffer), "Track: -");
-    rg_gui_draw_text(RG_GUI_CENTER, 138, 0, buffer, C_WHITE, C_BLACK, RG_TEXT_ALIGN_CENTER);
+    rg_gui_draw_text(RG_GUI_CENTER, 182, 0, buffer, C_WHITE, C_BLACK, RG_TEXT_ALIGN_CENTER);
     snprintf(buffer, sizeof(buffer), "A=Play/Pause B=Repeat Y=Choose MENU=Exit");
-    rg_gui_draw_text(RG_GUI_CENTER, 210, 0, buffer, C_SILVER, C_BLACK, RG_TEXT_ALIGN_CENTER);
+    rg_gui_draw_text(RG_GUI_CENTER, 204, 0, buffer, C_SILVER, C_BLACK, RG_TEXT_ALIGN_CENTER);
     snprintf(buffer, sizeof(buffer), "UP/DOWN=Track L/R=Seek 5s X=Random");
-    rg_gui_draw_text(RG_GUI_CENTER, 224, 0, buffer, C_SILVER, C_BLACK, RG_TEXT_ALIGN_CENTER);
+    rg_gui_draw_text(RG_GUI_CENTER, 218, 0, buffer, C_SILVER, C_BLACK, RG_TEXT_ALIGN_CENTER);
     rg_gui_set_surface(NULL);
     rg_display_submit(surface, 0);
+
     return true;
 }
 
 static int playlist_scandir_cb(const rg_scandir_t *entry, void *arg)
 {
-    if (entry->is_file && playlist_count < MAX_TRACKS && is_mp3_file(entry->path))
+    if (!entry->is_file || !is_mp3_file(entry->path))
+        return RG_SCANDIR_CONTINUE;
+
+    if (playlist_count >= playlist_capacity)
     {
-        strncpy(playlist[playlist_count], entry->path, RG_PATH_MAX);
-        playlist[playlist_count][RG_PATH_MAX] = '\0';
-        playlist_count++;
+        int new_capacity = playlist_capacity ? playlist_capacity * 2 : PLAYLIST_INITIAL_CAPACITY;
+        char (*new_list)[RG_PATH_MAX + 1] = realloc(playlist, (size_t)new_capacity * (RG_PATH_MAX + 1));
+        if (!new_list)
+        {
+            RG_LOGW("playlist: realloc to %d failed, keeping %d track(s)", new_capacity, playlist_count);
+            return RG_SCANDIR_STOP;
+        }
+        playlist = new_list;
+        playlist_capacity = new_capacity;
     }
+
+    strncpy(playlist[playlist_count], entry->path, RG_PATH_MAX);
+    playlist[playlist_count][RG_PATH_MAX] = '\0';
+    playlist_count++;
     return RG_SCANDIR_CONTINUE;
 }
 

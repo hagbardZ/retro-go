@@ -393,6 +393,13 @@ static size_t get_glyph(uint32_t *output, const rg_font_t *font, int points, int
     }
 }
 
+int rg_gui_measure_char(int codepoint)
+{
+    if (gui.font->type == 0)
+        return gui.font->width;
+    return get_glyph(NULL, gui.font, gui.font_height, codepoint);
+}
+
 rg_rect_t rg_gui_draw_text(int x_pos, int y_pos, int width, const char *text, // const rg_font_t *font,
                            rg_color_t color_fg, rg_color_t color_bg, uint32_t flags)
 {
