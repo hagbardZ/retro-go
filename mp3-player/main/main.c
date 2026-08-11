@@ -549,6 +549,71 @@ static void mp3_parse_id3v2(const uint8_t *buf, size_t size)
             tag_artist, tag_title, tag_album, tag_year, tag_genre);
 }
 
+/* Trim trailing NULs and the space padding used by ID3v1 fixed-width fields. */
+static void trim_tag_text(char *s)
+{
+    size_t len = strlen(s);
+    while (len > 0 && (s[len - 1] == ' ' || s[len - 1] == '\0'))
+        s[--len] = '\0';
+}
+
+/* Parse an ID3v1 tag (128-byte "TAG" block) into the tag_* globals. Fields
+ * already filled by ID3v2 are left untouched so ID3v2 keeps priority. */
+static void mp3_parse_id3v1(const uint8_t *buf)
+{
+    if (!buf || memcmp(buf, "TAG", 3) != 0)
+        return;
+
+    if (!tag_title[0])
+    {
+        memcpy(tag_title, buf + 3, 30);
+        tag_title[30] = '\0';
+        trim_tag_text(tag_title);
+    }
+    if (!tag_artist[0])
+    {
+        memcpy(tag_artist, buf + 33, 30);
+        tag_artist[30] = '\0';
+        trim_tag_text(tag_artist);
+    }
+    if (!tag_album[0])
+    {
+        memcpy(tag_album, buf + 63, 30);
+        tag_album[30] = '\0';
+        trim_tag_text(tag_album);
+    }
+    if (!tag_year[0])
+    {
+        memcpy(tag_year, buf + 93, 4);
+        tag_year[4] = '\0';
+        trim_tag_text(tag_year);
+    }
+    if (!tag_genre[0] && buf[127] != 0xFF &&
+        (size_t)buf[127] < sizeof(id3v1_genres) / sizeof(id3v1_genres[0]))
+        snprintf(tag_genre, sizeof(tag_genre), "%s", id3v1_genres[buf[127]]);
+
+    RG_LOGI("id3v1: artist='%s' title='%s' album='%s' year='%s' genre='%s'",
+            tag_artist, tag_title, tag_album, tag_year, tag_genre);
+}
+
+/* Read the 128-byte ID3v1 tag at the end of the file and parse it. Called
+ * after ID3v2 parsing so its fields take priority. Restores the file position
+ * since streaming relies on sequential reads. */
+static void mp3_read_id3v1(void)
+{
+    uint8_t buf[128];
+    long saved;
+
+    if (!mp3_file || mp3_file_size < 128)
+        return;
+
+    saved = ftell(mp3_file);
+    if (fseek(mp3_file, (long)(mp3_file_size - 128), SEEK_SET) == 0 &&
+        fread(buf, 1, 128, mp3_file) == 128)
+        mp3_parse_id3v1(buf);
+    fseek(mp3_file, saved, SEEK_SET);
+}
+
 static uint64_t mp3_audio_bytes(void)
 {
     if (mp3_meta.audio_bytes > 0)
@@ -860,6 +925,10 @@ static bool open_mp3(const char *path)
         mp3_input_left = mp3_stream_fill;
         mp3_stream_eof = false;
     }
+
+    /* Files without an ID3v2 tag (or with missing fields) fall back to the
+     * 128-byte ID3v1 tag at the end of the file. */
+    mp3_read_id3v1();
 
     mp3_stream_offset = mp3_id3_skip_bytes;
 
@@ -1377,7 +1446,7 @@ static bool draw_state(void)
     rg_surface_fill(surface, NULL, C_BLACK);
 
     snprintf(buffer, sizeof(buffer), "Audio: %dkbps/%dHz/%s Vol: %d%%  ", mp3_current_bitrate / 1000, sample_rate, driver ?driver : "Unknown", rg_audio_get_volume());
-    rg_gui_draw_text(RG_GUI_CENTER, 16, 0, buffer, C_WHITE, C_BLACK, RG_TEXT_ALIGN_CENTER);
+    rg_gui_draw_text(RG_GUI_CENTER, 16, 0, buffer, C_INDIGO, C_YELLOW_GREEN, RG_TEXT_ALIGN_CENTER);
 
     format_title(buffer, sizeof(buffer));
     rg_gui_draw_text(RG_GUI_CENTER, 30, 0, buffer, C_WHITE, C_BLACK, RG_TEXT_ALIGN_CENTER);
