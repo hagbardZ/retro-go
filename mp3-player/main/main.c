@@ -22,7 +22,7 @@
 #define MP3_STREAM_BUFFER_SIZE 32768
 #define MP3_PRIME_FRAMES 2
 #define PLAYLIST_INITIAL_CAPACITY 256
-#define MUSIC_PATH RG_BASE_PATH_ROMS "/music"
+#define MUSIC_PATH RG_BASE_PATH_MUSIC
 
 static rg_app_t *app;
 static rg_surface_t *surface;
@@ -1847,6 +1847,13 @@ void app_main(void)
      * where it left off after a power cycle, regardless of what file the
      * launcher passed as romPath. The in-app picker (Y) is used to switch. */
     bool resume_launch = last_track && *last_track && is_mp3_file(last_track);
+    if (resume_launch && strncmp(last_track, MUSIC_PATH, strlen(MUSIC_PATH)) != 0)
+    {
+        /* The saved track points outside the current music directory (eg. the
+         * path was changed between builds); drop the stale session. */
+        RG_LOGW("app_main: ignoring stale session track %s (outside %s)", last_track, MUSIC_PATH);
+        resume_launch = false;
+    }
     if (resume_launch)
     {
         random_mode = rg_settings_get_boolean(NS_APP, "lastRandom", false);

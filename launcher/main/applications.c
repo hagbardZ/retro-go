@@ -681,7 +681,7 @@ static void application(const char *desc, const char *name, const char *exts, co
     snprintf(app->paths.covers, RG_PATH_MAX, RG_BASE_PATH_COVERS "/%s", app->short_name);
     snprintf(app->paths.saves, RG_PATH_MAX, RG_BASE_PATH_SAVES "/%s", app->short_name);
     if (strcmp(app->partition, "mp3-player") == 0)
-        snprintf(app->paths.roms, RG_PATH_MAX, RG_BASE_PATH_ROMS "/music");
+        snprintf(app->paths.roms, RG_PATH_MAX, "%s", RG_BASE_PATH_MUSIC);
     else
         snprintf(app->paths.roms, RG_PATH_MAX, RG_BASE_PATH_ROMS "/%s", app->short_name);
     app->available = rg_system_have_app(app->partition);
