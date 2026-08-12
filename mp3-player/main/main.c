@@ -1434,6 +1434,36 @@ static void format_tag_line(char *buffer, size_t size, const char *label, const 
     fit_value(buffer, size, label, v, max_width - padding - line_width(label) - line_width("..."));
 }
 
+/* Draw the battery state-of-charge icon right-aligned at the far edge of the
+ * line whose top is at `y`, using the same style as the launcher status bar. */
+static void draw_battery_icon(int y)
+{
+    rg_battery_t battery = rg_input_read_battery();
+    if (!battery.present)
+        return;
+
+    rg_rect_t txt = TEXT_RECT("00:00", 0);
+    int bar_height = txt.height;
+    int icon_height = RG_MAX(8, bar_height - 4);
+    int icon_top = y + RG_MAX(0, (bar_height - icon_height - 1) / 2);
+
+    int width = 16;
+    int width_fill = RG_MAX(0, RG_MIN((int)(width / 100.f * battery.level), width));
+    int right = 22;
+    int x_pos = -right;
+    int y_pos = icon_top;
+
+    rg_color_t color_fill = (battery.level > 20 ? (battery.level > 40 ? C_FOREST_GREEN : C_ORANGE) : C_RED);
+    rg_color_t color_border = C_SILVER;
+
+    rg_gui_draw_rect(x_pos, y_pos, width + 2, icon_height, 1, color_border, C_NONE);
+    rg_gui_draw_rect(x_pos + width + 2, y_pos + 2, 2, icon_height - 4, 1, color_border, C_NONE);
+    if (width_fill > 0)
+        rg_gui_draw_rect(x_pos + 1, y_pos + 1, width_fill, icon_height - 2, 0, 0, color_fill);
+    if (width - width_fill > 0)
+        rg_gui_draw_rect(x_pos + 1 + width_fill, y_pos + 1, width - width_fill, icon_height - 2, 0, 0, C_BLACK);
+}
+
 static bool draw_state(void)
 {
     char buffer[128];
@@ -1447,14 +1477,15 @@ static bool draw_state(void)
 
 if (playing)
 {
-    snprintf(buffer, sizeof(buffer), "    Playing: %dkbps/%dHz/%s Vol: %d%%    ", mp3_current_bitrate / 1000, sample_rate, driver ?driver : "Unknown", rg_audio_get_volume());
+    snprintf(buffer, sizeof(buffer), "  Playing: %dkbps/%dHz/%s Vol: %d%%  ", mp3_current_bitrate / 1000, sample_rate, driver ?driver : "Unknown", rg_audio_get_volume());
     rg_gui_draw_text(RG_GUI_CENTER, 16, 0, buffer, C_INDIGO, C_YELLOW_GREEN, RG_TEXT_ALIGN_CENTER);
 }
 else
 {
-    snprintf(buffer, sizeof(buffer), "    PAUSED:    press B to continue   Vol: %d%%    ", rg_audio_get_volume());
+    snprintf(buffer, sizeof(buffer), "  PAUSED:  press B to continue   Vol: %d%%  ", rg_audio_get_volume());
     rg_gui_draw_text(RG_GUI_CENTER, 16, 0, buffer, C_INDIGO, C_LIGHT_CORAL, RG_TEXT_ALIGN_CENTER);
 }
+    draw_battery_icon(16);
     format_title(buffer, sizeof(buffer));
     rg_gui_draw_text(RG_GUI_CENTER, 34, 0, buffer, C_WHITE, C_BLACK, RG_TEXT_ALIGN_CENTER);
 
