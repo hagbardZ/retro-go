@@ -1444,14 +1444,15 @@ static bool draw_state(void)
 
     rg_gui_set_surface(surface);
     rg_surface_fill(surface, NULL, C_BLACK);
+
 if (playing)
 {
-    snprintf(buffer, sizeof(buffer), "Audio: %dkbps/%dHz/%s Vol: %d%%  ", mp3_current_bitrate / 1000, sample_rate, driver ?driver : "Unknown", rg_audio_get_volume());
+    snprintf(buffer, sizeof(buffer), "    Playing: %dkbps/%dHz/%s Vol: %d%%    ", mp3_current_bitrate / 1000, sample_rate, driver ?driver : "Unknown", rg_audio_get_volume());
     rg_gui_draw_text(RG_GUI_CENTER, 16, 0, buffer, C_INDIGO, C_YELLOW_GREEN, RG_TEXT_ALIGN_CENTER);
 }
 else
 {
-    snprintf(buffer, sizeof(buffer), "--  PAUSED:    press B to continue   Vol: %d%%  --", rg_audio_get_volume());
+    snprintf(buffer, sizeof(buffer), "    PAUSED:    press B to continue   Vol: %d%%    ", rg_audio_get_volume());
     rg_gui_draw_text(RG_GUI_CENTER, 16, 0, buffer, C_INDIGO, C_LIGHT_CORAL, RG_TEXT_ALIGN_CENTER);
 }
     format_title(buffer, sizeof(buffer));
