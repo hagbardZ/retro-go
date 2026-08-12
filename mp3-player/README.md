@@ -1,3 +1,4 @@
+
 # MP3 Player for Retro-Go
 
 This is a **MP3-Player** for the **Retro-Go** ecosystem.
@@ -15,6 +16,10 @@ Only tested for ESP32P4.
 - **Repeat** B Key
 - **Seek forward/rewind** left/right
 - **Track forward/back** up/down
+
+
+<img width="679" height="821" alt="MartendoMp3PlayerScreen" src="https://github.com/user-attachments/assets/371ffcf4-8794-4c0a-9626-283b8e806c41" />
+
 
 
 ## Installation
