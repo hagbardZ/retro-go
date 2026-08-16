@@ -723,6 +723,7 @@ void applications_init(void)
     application("Apps", "apps", "bin elf", "bootstrap", 0);
     application("Classicube", "classicube", "sh", "classicube", 0);
     application("Super Mario 64", "sm64", "z64 zip", "sm64-go", 0);
+    application("Commodore 64", "c64", "crt zip prg d64 t64", "frodo", 0);
 
     if (rg_system_get_stats().freeMemory > 0x100000)
         crc_cache_init();

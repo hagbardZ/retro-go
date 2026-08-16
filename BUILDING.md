@@ -18,6 +18,9 @@ _Note: As of retro-go 1.47, I use 5.1. I used 4.4 for 1.44 to 1.46, 4.3 for 1.35
        
        python rg_tool.py --target martendo32-ips-hdmi build-img launcher mp3-player snes9x retro-core prboom-go fmsx bootstrap openlara celeste cannonball classicube duke3d-go quake-go gwenesis gbsp ngp-go stella --no-networking 
 
+       python rg_tool.py --target martendo32-ips-hdmi release launcher mp3-player snes9x retro-core prboom-go fmsx openlara celeste cannonball classicube duke3d-go quake-go gwenesis gbsp ngp-go frodo --no-networking
+       
+       
 ### compiling for Martendo32 (examples):
        
        python rg_tool.py --target martendo32 build-img --no-networking
