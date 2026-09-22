@@ -1,0 +1,7 @@
+## IDF Component Manager Manifest File
+## Declares dependencies fetched by the component manager during the build.
+dependencies:
+  usb_host_msc:
+    version: "^1.1.1"
+    rules:
+      - if: "target == esp32p4"

@@ -42,6 +42,7 @@
 #define RG_GPIO_SDMMC_D2               GPIO_NUM_39
 #define RG_GPIO_SDMMC_D3               GPIO_NUM_40
 // #define RG_STORAGE_FLASH_PARTITION  "vfs"
+#define RG_STORAGE_USBOTG_HOST        // USB Host Mass Storage, mounted at "/usb0" (USB_DM/DP = module pins 16/17)
 
 
 /****************************************************************************

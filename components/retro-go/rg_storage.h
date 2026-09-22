@@ -21,6 +21,10 @@
 #define RG_BASE_PATH_UPDATES RG_BASE_PATH "/updates"
 #endif
 
+/* When RG_STORAGE_USBOTG_HOST is enabled, connected USB mass storage drives
+ * are mounted at /usb0, /usb1, ... on top of the regular storage. */
+#define RG_STORAGE_USB_MOUNT_PATH "/usb"
+
 typedef struct
 {
     char path[RG_PATH_MAX + 1];
@@ -70,6 +74,14 @@ bool rg_storage_mkdir(const char *dir);
 rg_stat_t rg_storage_stat(const char *path);
 bool rg_storage_scandir(const char *path, rg_scandir_cb_t *callback, void *arg, uint32_t flags);
 int64_t rg_storage_get_free_space(const char *path);
+
+#if defined(RG_STORAGE_USBOTG_HOST)
+int rg_storage_usb_mount_count(void);
+bool rg_storage_usb_wait(int64_t timeout_ms);
+#else
+static inline int rg_storage_usb_mount_count(void) { return 0; }
+static inline bool rg_storage_usb_wait(int64_t timeout_ms) { (void)timeout_ms; return true; }
+#endif
 
 enum
 {

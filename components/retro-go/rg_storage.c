@@ -7,6 +7,20 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if defined(RG_STORAGE_USBOTG_HOST)
+#include <esp_intr_alloc.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include <freertos/queue.h>
+#include "usb/usb_host.h"
+#include "usb/msc_host.h"
+#include "usb/msc_host_vfs.h"
+#include "driver/gpio.h"
+#if CONFIG_IDF_TARGET_ESP32P4
+#include "hal/usb_wrap_ll.h"
+#endif
+#endif
+
 #if defined(RG_STORAGE_SDSPI_HOST)
 #include <driver/sdspi_host.h>
 #define SDCARD_DO_TRANSACTION sdspi_host_do_transaction
@@ -49,6 +63,11 @@ static wl_handle_t wl_handle = WL_INVALID_HANDLE;
         RG_LOGE("No path given"); \
         return false;             \
     }
+
+#if defined(RG_STORAGE_USBOTG_HOST)
+static void rg_storage_usb_init(void);
+static void rg_storage_usb_deinit(void);
+#endif
 
 #if defined(RG_STORAGE_SDSPI_HOST) || defined(RG_STORAGE_SDMMC_HOST)
 static esp_err_t sdcard_do_transaction(int slot, sdmmc_command_t *cmdinfo)
@@ -176,9 +195,8 @@ void rg_storage_init(void)
 
 #elif defined(RG_STORAGE_USBOTG_HOST)
 
-    #warning "USB OTG isn't available on your SOC"
-    RG_LOGI("Looking for USB mass storage...");
-    error_code = -1;
+    RG_LOGI("Looking for USB mass storage on %s0...", RG_STORAGE_USB_MOUNT_PATH);
+    error_code = -1; // USB is mounted asynchronously, see rg_storage_usb_init()
 
 #elif !defined(RG_STORAGE_FLASH_PARTITION)
 
@@ -205,6 +223,12 @@ void rg_storage_init(void)
 
 #endif
 
+#if defined(RG_STORAGE_USBOTG_HOST)
+    /* USB mass storage is supplemental (and asynchronous), so it is started
+     * regardless of whether the main storage mounted successfully. */
+    rg_storage_usb_init();
+#endif
+
     disk_mounted = !error_code;
 
     if (disk_mounted)
@@ -215,42 +239,46 @@ void rg_storage_init(void)
 
 void rg_storage_deinit(void)
 {
-    if (!disk_mounted)
-        return;
+    if (disk_mounted)
+    {
+        rg_storage_commit();
 
-    rg_storage_commit();
-
-    int error_code = 0;
+        int error_code = 0;
 
 #if defined(RG_STORAGE_SDSPI_HOST) || defined(RG_STORAGE_SDMMC_HOST)
-    if (card_handle != NULL)
-    {
-        esp_err_t err = esp_vfs_fat_sdcard_unmount(RG_STORAGE_ROOT, card_handle);
-        card_handle = NULL; // NULL it regardless of success, nothing we can do on errors...
-        error_code = (int)err;
-    }
+        if (card_handle != NULL)
+        {
+            esp_err_t err = esp_vfs_fat_sdcard_unmount(RG_STORAGE_ROOT, card_handle);
+            card_handle = NULL; // NULL it regardless of success, nothing we can do on errors...
+            error_code = (int)err;
+        }
 #endif
 
 #if defined(RG_STORAGE_FLASH_PARTITION)
-    if (wl_handle != WL_INVALID_HANDLE)
-    {
-        esp_err_t err = esp_vfs_fat_spiflash_unmount(RG_STORAGE_ROOT, wl_handle);
-        wl_handle = WL_INVALID_HANDLE;
-        error_code = (int)err;
-    }
+        if (wl_handle != WL_INVALID_HANDLE)
+        {
+            esp_err_t err = esp_vfs_fat_spiflash_unmount(RG_STORAGE_ROOT, wl_handle);
+            wl_handle = WL_INVALID_HANDLE;
+            error_code = (int)err;
+        }
 #endif
 
-    if (error_code)
-        RG_LOGE("Storage unmounting failed. err=0x%x", error_code);
-    else
-        RG_LOGI("Storage unmounted.");
+        if (error_code)
+            RG_LOGE("Storage unmounting failed. err=0x%x", error_code);
+        else
+            RG_LOGI("Storage unmounted.");
 
-    disk_mounted = false;
+        disk_mounted = false;
+    }
+
+#if defined(RG_STORAGE_USBOTG_HOST)
+    rg_storage_usb_deinit();
+#endif
 }
 
 bool rg_storage_ready(void)
 {
-    return disk_mounted;
+    return disk_mounted || rg_storage_usb_mount_count() > 0;
 }
 
 void rg_storage_commit(void)
@@ -681,3 +709,255 @@ bool rg_storage_unzip_file(const char *zip_path, const char *filter, void **data
     return false;
 }
 #endif
+
+#if defined(RG_STORAGE_USBOTG_HOST)
+
+#if CONFIG_IDF_TARGET_ESP32P4
+#include "hal/usb_wrap_ll.h"
+#include "soc/usb_wrap_struct.h"
+#endif
+
+/* USB Host Mass Storage support. A background task installs the USB host
+ * library and MSC driver, then enumerates connected USB drives and mounts each
+ * one at /usb0, /usb1, ... (see RG_STORAGE_USB_MOUNT_PATH). The main storage
+ * (SD card / flash) is unaffected and keeps RG_STORAGE_ROOT. */
+#define RG_USB_MAX_DEVICES (CONFIG_FATFS_VOLUME_COUNT > 1 ? CONFIG_FATFS_VOLUME_COUNT - 1 : 1)
+
+typedef struct
+{
+    uint8_t usb_addr;                 /* USB device address */
+    msc_host_device_handle_t msc_device;  /* MSC device handle */
+    msc_host_vfs_handle_t vfs_handle;     /* VFS handle for the mount point */
+} rg_usb_device_t;
+
+typedef struct
+{
+    enum
+    {
+        RG_USB_DEVICE_CONNECTED,
+        RG_USB_DEVICE_DISCONNECTED,
+    } id;
+    union
+    {
+        uint8_t address;                 /* Newly connected device address */
+        msc_host_device_handle_t device; /* Handle of the removed device */
+    } data;
+} rg_usb_msg_t;
+
+static rg_usb_device_t *rg_usb_devices[RG_USB_MAX_DEVICES] = {0};
+static QueueHandle_t rg_usb_queue = NULL;
+static int rg_usb_mount_count = 0;
+
+static int rg_usb_find_free_slot(void)
+{
+    for (int i = 0; i < RG_USB_MAX_DEVICES; i++)
+        if (rg_usb_devices[i] == NULL)
+            return i;
+    return -1;
+}
+
+static void rg_usb_msc_event_cb(const msc_host_event_t *event, void *arg)
+{
+    if (!rg_usb_queue)
+        return;
+
+    if (event->event == MSC_DEVICE_CONNECTED)
+    {
+        rg_usb_msg_t msg = {.id = RG_USB_DEVICE_CONNECTED, .data.address = event->device.address};
+        xQueueSend(rg_usb_queue, &msg, portMAX_DELAY);
+    }
+    else if (event->event == MSC_DEVICE_DISCONNECTED)
+    {
+        rg_usb_msg_t msg = {.id = RG_USB_DEVICE_DISCONNECTED, .data.device = event->device.handle};
+        xQueueSend(rg_usb_queue, &msg, portMAX_DELAY);
+    }
+}
+
+static void rg_usb_host_task(void *arg)
+{
+    const usb_host_config_t host_config = {.intr_flags = ESP_INTR_FLAG_LEVEL1};
+    if (usb_host_install(&host_config) != ESP_OK)
+    {
+        RG_LOGE("rg_usb: usb_host_install failed");
+        vTaskDelete(NULL);
+        return;
+    }
+#if CONFIG_IDF_TARGET_ESP32P4
+    RG_LOGI("rg_usb: DWC selected, FSLS phy pad_enable=%d (usb_wrap otg_conf=0x%08lx)",
+            (int)usb_wrap_ll_phy_is_pad_enabled(&USB_WRAP), (unsigned long)USB_WRAP.otg_conf.val);
+
+    // The HS/UTMI DWC host talks over its dedicated USB pads (module pins 16/17) and does
+    // not need the OTG11 FSLS PHY that is mapped to GPIO26/27 (buttons A/B). Powering that
+    // PHY block back down and returning the pads to GPIO inputs prevents the FSLS bus-idle
+    // state from holding the gamepad lines low.
+    LP_AON_CLKRST.hp_usb_clkrst_ctrl0.usb_otg11_48m_clk_en = 0;
+    HP_SYS_CLKRST.soc_clk_ctrl1.reg_usb_otg11_sys_clk_en = 0;
+    LP_AON_CLKRST.hp_usb_clkrst_ctrl1.rst_en_usb_otg11 = 1;
+    LP_AON_CLKRST.hp_usb_clkrst_ctrl1.rst_en_usb_otg11 = 0;
+    USB_WRAP.otg_conf.usb_pad_enable = 0;
+    gpio_config_t gpio_cfg = {
+        .pin_bit_mask = (1ULL << GPIO_NUM_26) | (1ULL << GPIO_NUM_27),
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&gpio_cfg);
+    RG_LOGI("rg_usb: OTG11 FSLS PHY powered down, GPIO26/27 restored (otg_conf=0x%08lx)",
+            (unsigned long)USB_WRAP.otg_conf.val);
+#endif
+
+    const msc_host_driver_config_t msc_config = {
+        .create_backround_task = true,
+        .task_priority = 5,
+        .stack_size = 4096,
+        .callback = rg_usb_msc_event_cb,
+    };
+    if (msc_host_install(&msc_config) != ESP_OK)
+    {
+        RG_LOGE("rg_usb: msc_host_install failed");
+        vTaskDelete(NULL);
+        return;
+    }
+
+    RG_LOGI("rg_usb: host installed, waiting for USB mass storage devices");
+
+    for (;;)
+    {
+        uint32_t event_flags = 0;
+        usb_host_lib_handle_events(portMAX_DELAY, &event_flags);
+        /* The MSC driver is a client and keeps running until we uninstall it,
+         * so there is nothing else to do here. */
+    }
+}
+
+static void rg_usb_event_task(void *arg)
+{
+    rg_usb_msg_t msg;
+
+    while (xQueueReceive(rg_usb_queue, &msg, portMAX_DELAY) == pdTRUE)
+    {
+        if (msg.id == RG_USB_DEVICE_CONNECTED)
+        {
+            int slot = rg_usb_find_free_slot();
+            if (slot < 0)
+            {
+                RG_LOGW("rg_usb: no free slot for new device (max %d)", RG_USB_MAX_DEVICES);
+                continue;
+            }
+
+            rg_usb_device_t *dev = calloc(1, sizeof(*dev));
+            if (!dev)
+                continue;
+
+            esp_err_t err = msc_host_install_device(msg.data.address, &dev->msc_device);
+            if (err != ESP_OK)
+            {
+                RG_LOGE("rg_usb: msc_host_install_device failed: %s", esp_err_to_name(err));
+                free(dev);
+                continue;
+            }
+            dev->usb_addr = msg.data.address;
+
+            const esp_vfs_fat_mount_config_t mount_config = {
+                .format_if_mount_failed = false,
+                .max_files = 4,
+                .allocation_unit_size = 8192,
+            };
+
+            char mount_path[16];
+            snprintf(mount_path, sizeof(mount_path), RG_STORAGE_USB_MOUNT_PATH "%d", slot);
+
+            err = msc_host_vfs_register(dev->msc_device, mount_path, &mount_config, &dev->vfs_handle);
+            if (err != ESP_OK)
+            {
+                RG_LOGW("rg_usb: failed to mount %s: %s", mount_path, esp_err_to_name(err));
+                msc_host_uninstall_device(dev->msc_device);
+                free(dev);
+                continue;
+            }
+
+            rg_usb_devices[slot] = dev;
+            rg_usb_mount_count++;
+            RG_LOGI("rg_usb: mounted %s", mount_path);
+        }
+        else if (msg.id == RG_USB_DEVICE_DISCONNECTED)
+        {
+            for (int i = 0; i < RG_USB_MAX_DEVICES; i++)
+            {
+                rg_usb_device_t *dev = rg_usb_devices[i];
+                if (dev && dev->msc_device == msg.data.device)
+                {
+                    msc_host_vfs_unregister(dev->vfs_handle);
+                    msc_host_uninstall_device(dev->msc_device);
+                    free(dev);
+                    rg_usb_devices[i] = NULL;
+                    rg_usb_mount_count--;
+                    RG_LOGI("rg_usb: unmounted %s%d", RG_STORAGE_USB_MOUNT_PATH, i);
+                    break;
+                }
+            }
+        }
+    }
+}
+
+int rg_storage_usb_mount_count(void)
+{
+    return rg_usb_mount_count;
+}
+
+bool rg_storage_usb_wait(int64_t timeout_ms)
+{
+    int64_t deadline = rg_system_timer() + timeout_ms * 1000;
+    while (rg_usb_mount_count == 0 && rg_system_timer() < deadline)
+        rg_task_delay(10);
+    return rg_usb_mount_count > 0;
+}
+
+static void rg_storage_usb_init(void)
+{
+    if (rg_usb_queue)
+        return; // Already initialized
+
+    rg_usb_queue = xQueueCreate(8, sizeof(rg_usb_msg_t));
+    if (!rg_usb_queue)
+    {
+        RG_LOGE("rg_usb: failed to create event queue");
+        return;
+    }
+
+    if (xTaskCreate(rg_usb_host_task, "rg_usb_host", 4096, NULL, 2, NULL) != pdPASS)
+        RG_LOGE("rg_usb: failed to create host task");
+    if (xTaskCreate(rg_usb_event_task, "rg_usb_event", 8192, NULL, 5, NULL) != pdPASS)
+        RG_LOGE("rg_usb: failed to create event task");
+}
+
+static void rg_storage_usb_deinit(void)
+{
+    for (int i = 0; i < RG_USB_MAX_DEVICES; i++)
+    {
+        rg_usb_device_t *dev = rg_usb_devices[i];
+        if (!dev)
+            continue;
+        if (dev->vfs_handle)
+            msc_host_vfs_unregister(dev->vfs_handle);
+        if (dev->msc_device)
+            msc_host_uninstall_device(dev->msc_device);
+        free(dev);
+        rg_usb_devices[i] = NULL;
+    }
+    rg_usb_mount_count = 0;
+
+    msc_host_uninstall();
+    /* usb_host_uninstall() must be called from the host task itself (see the
+     * example), which keeps running; the hardware resets on the upcoming
+     * reboot anyway. */
+
+    if (rg_usb_queue)
+    {
+        vQueueDelete(rg_usb_queue);
+        rg_usb_queue = NULL;
+    }
+}
+
+#endif /* RG_STORAGE_USBOTG_HOST */

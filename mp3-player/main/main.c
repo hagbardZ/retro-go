@@ -720,6 +720,24 @@ static bool is_mp3_file(const char *path)
     return ext && (strcasecmp(ext, "mp3") == 0);
 }
 
+/* True if the path lives under one of the media roots (SD music folder or a
+ * mounted USB drive such as /usb0). Used to validate saved sessions. */
+static bool media_root_path(const char *path)
+{
+    if (!path || !*path)
+        return false;
+    if (strncmp(path, MUSIC_PATH, strlen(MUSIC_PATH)) == 0)
+        return true;
+    return strncmp(path, RG_STORAGE_USB_MOUNT_PATH, strlen(RG_STORAGE_USB_MOUNT_PATH)) == 0;
+}
+
+/* Where the file picker opens. When a USB drive is mounted, start at "/"
+ * so both /usb0 (and other sticks) and the SD music folder are reachable. */
+static const char *picker_start_path(void)
+{
+    return rg_storage_usb_mount_count() > 0 ? "/" : MUSIC_PATH;
+}
+
 static bool find_mp3_frame_start_from(const unsigned char *start, size_t left)
 {
     if (!start || left < 4)
@@ -1550,8 +1568,20 @@ static bool load_playlist(void)
 {
     playlist_count = 0;
     playlist_index = -1;
+
     rg_storage_scandir(MUSIC_PATH, playlist_scandir_cb, NULL, RG_SCANDIR_FILES | RG_SCANDIR_RECURSIVE | RG_SCANDIR_SORT);
-    RG_LOGI("load_playlist: %d track(s) in %s", playlist_count, MUSIC_PATH);
+
+    char usb_path[RG_PATH_MAX];
+    for (int slot = 0; slot < 4; slot++)
+    {
+        snprintf(usb_path, sizeof(usb_path), "%s%d", RG_STORAGE_USB_MOUNT_PATH, slot);
+        if (!rg_storage_exists(usb_path))
+            continue;
+        RG_LOGI("load_playlist: scanning %s", usb_path);
+        rg_storage_scandir(usb_path, playlist_scandir_cb, NULL, RG_SCANDIR_FILES | RG_SCANDIR_RECURSIVE | RG_SCANDIR_SORT);
+    }
+
+    RG_LOGI("load_playlist: %d track(s) in %s and USB drives", playlist_count, MUSIC_PATH);
     return playlist_count > 0;
 }
 
@@ -1733,7 +1763,7 @@ static void handle_track_finished(void)
 static void picker_task(void *arg)
 {
     RG_LOGI("picker_task: opening file picker");
-    char *filename = rg_gui_file_picker("Select MP3", MUSIC_PATH, is_mp3_file, true, true);
+    char *filename = rg_gui_file_picker("Select MP3", picker_start_path(), is_mp3_file, true, true);
     picker_result = filename;
     picker_done = true;
     RG_LOGI("picker_task: done, result=%p", (void *)filename);
@@ -1941,6 +1971,10 @@ void app_main(void)
 
     surface = rg_surface_create(rg_display_get_width(), rg_display_get_height(), RG_PIXEL_565_LE, MEM_SLOW);
 
+    /* Give a freshly plugged USB stick a moment to enumerate and mount before
+     * the initial playlist scan. No-op when USB host storage isn't built in. */
+    rg_storage_usb_wait(2000);
+
     load_playlist();
 
     if (!rg_task_create("session-save", save_session_worker, NULL, 6144, 0, RG_TASK_PRIORITY_1, -1))
@@ -1954,15 +1988,18 @@ void app_main(void)
      * where it left off after a power cycle, regardless of what file the
      * launcher passed as romPath. The in-app picker (Y) is used to switch. */
     bool resume_launch = last_track && *last_track && is_mp3_file(last_track);
-    if (resume_launch && strncmp(last_track, MUSIC_PATH, strlen(MUSIC_PATH)) != 0)
+    if (resume_launch && !media_root_path(last_track))
     {
-        /* The saved track points outside the current music directory (eg. the
+        /* The saved track points outside the known music locations (eg. the
          * path was changed between builds); drop the stale session. */
-        RG_LOGW("app_main: ignoring stale session track %s (outside %s)", last_track, MUSIC_PATH);
+        RG_LOGW("app_main: ignoring stale session track %s (outside %s and /usb*)", last_track, MUSIC_PATH);
         resume_launch = false;
     }
     if (resume_launch)
     {
+        /* A saved USB track can only be resumed once the stick is mounted. */
+        if (strncmp(last_track, RG_STORAGE_USB_MOUNT_PATH, strlen(RG_STORAGE_USB_MOUNT_PATH)) == 0)
+            rg_storage_usb_wait(3000);
         random_mode = rg_settings_get_boolean(NS_APP, "lastRandom", false);
         repeat_mode = rg_settings_get_boolean(NS_APP, "lastRepeat", false);
         RG_LOGI("app_main: resuming %s byte=%u", last_track, (unsigned int)last_byte);
@@ -1992,7 +2029,7 @@ void app_main(void)
     if (!playing)
     {
         draw_text_centered(120, "Select an MP3 file");
-        char *filename = rg_gui_file_picker("Select MP3", MUSIC_PATH, is_mp3_file, true, true);
+        char *filename = rg_gui_file_picker("Select MP3", picker_start_path(), is_mp3_file, true, true);
         if (!filename || !*filename)
             rg_system_exit();
 

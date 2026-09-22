@@ -8,6 +8,10 @@ else() # esp-idf 4.1 - 4.4
     set(COMPONENT_REQUIRES "spi_flash fatfs app_update esp_adc_cal json nvs_flash esp_wifi esp_http_client")
 endif()
 
+if(IDF_TARGET STREQUAL "esp32p4") # USB Host for mass storage (usb_host_msc is fetched via idf_component.yml)
+    list(APPEND COMPONENT_REQUIRES "usb")
+    list(APPEND COMPONENT_REQUIRES "espressif__usb_host_msc")
+endif()
 register_component()
 
 # Small size is preferred because of the small cache and most things here aren't performance sensitive!

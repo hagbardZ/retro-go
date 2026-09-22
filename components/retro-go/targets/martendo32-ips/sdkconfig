@@ -1317,6 +1317,10 @@ CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
 # end of PSRAM config
 # end of ESP PSRAM
 
+# USB Host (OTG) with USB mass storage support
+CONFIG_USB_HOST_DWC_DMA_CAP_MEMORY_IN_PSRAM=y
+
+
 #
 # ESP Ringbuf
 #
