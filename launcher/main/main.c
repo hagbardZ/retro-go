@@ -4,15 +4,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "driver/gpio.h"
-#if CONFIG_IDF_TARGET_ESP32P4
-#include "soc/usb_wrap_struct.h"
-#include "soc/io_mux_reg.h"
-#include "soc/gpio_struct.h"
-#include "soc/lp_system_struct.h"
-#include "soc/lp_clkrst_struct.h"
-#include "soc/hp_sys_clkrst_struct.h"
-#endif
 
 #include "applications.h"
 #include "bookmarks.h"
@@ -246,20 +237,6 @@ static void retro_loop(void)
 
         prev_joystick = gui.joystick;
         joystick = 0;
-
-        static int diag_n = 0;
-        uint32_t diag_raw = 0;
-        rg_input_read_gamepad_raw(&diag_raw);
-        if (++diag_n % 20 == 1)
-            RG_LOGI("DIAG gp26=%d gp27=%d gamepad=0x%08X raw=0x%08X mux26=0x%08lx mux27=0x%08lx pin26=0x%08x pin27=0x%08x enable=0x%08x in=0x%08x otg_conf=0x%08lx lp_usb=0x%08lx clk0=0x%08lx clk1=0x%08lx",
-                    gpio_get_level(GPIO_NUM_26), gpio_get_level(GPIO_NUM_27), gui.joystick, diag_raw,
-                    (unsigned long)REG_READ(IO_MUX_GPIO26_REG), (unsigned long)REG_READ(IO_MUX_GPIO27_REG),
-                    (unsigned int)GPIO.pin[GPIO_NUM_26].val, (unsigned int)GPIO.pin[GPIO_NUM_27].val,
-                    (unsigned int)GPIO.enable.val, (unsigned int)GPIO.in.val,
-                    (unsigned long)USB_WRAP.otg_conf.val,
-                    (unsigned long)LP_SYS.usb_ctrl.val,
-                    (unsigned long)LP_AON_CLKRST.hp_usb_clkrst_ctrl0.val,
-                    (unsigned long)HP_SYS_CLKRST.soc_clk_ctrl1.val);
 
         if ((gui.joystick = rg_input_read_gamepad()))
         {

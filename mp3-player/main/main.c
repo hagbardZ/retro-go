@@ -731,11 +731,12 @@ static bool media_root_path(const char *path)
     return strncmp(path, RG_STORAGE_USB_MOUNT_PATH, strlen(RG_STORAGE_USB_MOUNT_PATH)) == 0;
 }
 
-/* Where the file picker opens. When a USB drive is mounted, start at "/"
- * so both /usb0 (and other sticks) and the SD music folder are reachable. */
+/* Where the file picker opens. When a USB drive is mounted we can't start at
+ * "/" (ESP-IDF only registers VFS layers at "/sd" and "/usb0", never at the
+ * root itself, so opendir("/") fails), so start inside the mounted drive. */
 static const char *picker_start_path(void)
 {
-    return rg_storage_usb_mount_count() > 0 ? "/" : MUSIC_PATH;
+    return rg_storage_usb_mount_count() > 0 ? RG_STORAGE_USB_MOUNT_PATH "0" : MUSIC_PATH;
 }
 
 static bool find_mp3_frame_start_from(const unsigned char *start, size_t left)
