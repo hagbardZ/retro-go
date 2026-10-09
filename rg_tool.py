@@ -15,7 +15,7 @@ DEFAULT_TARGET = os.getenv("RG_TOOL_TARGET", "odroid-go")
 DEFAULT_BAUD = os.getenv("RG_TOOL_BAUD", "1152000")
 DEFAULT_PORT = os.getenv("RG_TOOL_PORT", "COM3")
 
-DEFAULT_APPS = os.getenv("RG_TOOL_APPS", "launcher retro-core prboom-go snes9x gwenesis fmsx gbsp ngp-go bootstrap duke3d-go stella openlara opentyrian celeste quake-go cannonball classicube sm64-go mp3-player frodo")
+DEFAULT_APPS = os.getenv("RG_TOOL_APPS", "launcher retro-core prboom-go snes9x gwenesis fmsx gbsp ngp-go bootstrap duke3d-go stella openlara opentyrian celeste quake-go cannonball classicube sm64-go mp3-player frodo pcsx_rearmed")
 PROJECT_NAME = os.getenv("PROJECT_NAME", "Retro-Go")
 PROJECT_ICON = os.getenv("PROJECT_ICON", "assets/icon.raw")
 PROJECT_APPS = {
@@ -41,6 +41,7 @@ PROJECT_APPS = {
   'sm64-go':      [0, 16, 12582912],
   'frodo':        [0, 16, 655360],
   'opentyrian':   [0, 16, 655360],
+  'pcsx_rearmed': [0, 16, 1048576],
 }
 # PROJECT_APPS = {}
 # for t in glob.glob("*/CMakeLists.txt"):
