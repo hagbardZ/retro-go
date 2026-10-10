@@ -726,6 +726,7 @@ void applications_init(void)
     application("Commodore 64", "c64", "crt zip prg d64 t64", "frodo", 0);
     application("Open Tyrian", "opentyrian", "cdt", "opentyrian", 0);
     application("Playstation", "psx", "chd bin", "pcsx_rearmed", 0);
+    application("Mario Kart 64", "mk64", "z64 n64 v64", "mk64-go", 0);
 
     if (rg_system_get_stats().freeMemory > 0x100000)
         crc_cache_init();

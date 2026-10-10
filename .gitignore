@@ -21,3 +21,6 @@ build/
 /stdout.txt
 /gmon.out
 /*.exe
+
+# MK64-Go generated asset headers (gen_asset_headers.py, gen_course_metadata.py)
+/mk64-go/components/mk64-go/include/assets/
