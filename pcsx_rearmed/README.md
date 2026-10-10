@@ -163,6 +163,31 @@ Detailed frame and renderer diagnostics are disabled by default. Developers
 can enable `PCSX_PORT_PROFILE` through CMake or use Retro-Go's profiling build
 configuration. RV32 development notes are in [NDRC_RV32.md](NDRC_RV32.md).
 
+### Internal RAM and the emulator's BSS
+
+FreeRTOS task stacks can only be allocated from internal RAM: in ESP-IDF,
+`xTaskCreatePinnedToCore` uses `pvPortMalloc`, which is restricted to
+`MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT` (`pvPortMallocStack` equals
+`pvPortMalloc` because `configSTACK_ALLOCATION_FROM_SEPARATE_HEAP = 0`).
+`CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY` only affects statically allocated
+stacks; it does not move dynamic stacks to PSRAM.
+
+The libpcsxcore objects declared with `CORE_BSS_ATTR` include the two 128 KiB
+memory-card buffers (`Mcd1Data`/`Mcd2Data` in `sio.c`), the MDEC tables, and a
+handful of BIOS file variables. In `libpcsxcore/r3000a.h`, `CORE_BSS_ATTR`
+resolves to `EXT_RAM_BSS_ATTR` on both ESP32-P4 and ESP32-S3, so those objects
+live in PSRAM (`.ext_ram.bss`). This keeps roughly 256 KiB of the internal heap
+free, which is required on targets that also spend internal RAM on other
+consumers (for example USB host mass storage). Without it, the internal heap
+becomes too fragmented to allocate the 48 KiB `emu_task` stack and the app
+aborts with `Failed to create emu_task`.
+
+Placing these objects in PSRAM has no meaningful performance effect: they are
+cold (memory-card I/O, FMV decoding, and BIOS file operations only), while the
+hot emulation memory (1 MiB VRAM, PS1 RAM) is already in PSRAM. The change
+requires `CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y`, which the P4 and S3
+Retro-Go targets set.
+
 ## Credits and license
 
 Thanks to the PCSX and PCSX-ReARMed contributors, including notaz, the

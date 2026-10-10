@@ -28,7 +28,19 @@ extern "C" {
 #include "psxcommon.h"
 
 #if defined(CONFIG_IDF_TARGET_ESP32P4)
-#define CORE_BSS_ATTR 
+/* Keep the large, cold libpcsxcore BSS objects (the 2x128 KiB memory-card
+ * buffers in sio.c, the MDEC tables and a few BIOS file vars) in external
+ * RAM on P4. If they live in internal .bss they consume ~256 KiB of the
+ * internal heap, which is the only memory xTaskCreatePinnedToCore may use
+ * for task stacks (pvPortMalloc -> MALLOC_CAP_INTERNAL). On targets with
+ * extra internal-RAM consumers (e.g. USB host mass storage) the internal
+ * heap ends up too fragmented to allocate the 48 KiB emu_task stack and
+ * app_main() aborts with "Failed to create emu_task". These objects are
+ * cold (memory-card I/O, FMV decoding, BIOS file ops), so PSRAM residency
+ * has no meaningful impact on emulation performance. Requires
+ * CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y (already set by the P4
+ * targets); mirrors the existing ESP32-S3 definition below. */
+#define CORE_BSS_ATTR EXT_RAM_BSS_ATTR
 #define CORE_DATA_ATTR 
 #elif defined(CONFIG_IDF_TARGET_ESP32S3)
 #define CORE_BSS_ATTR EXT_RAM_BSS_ATTR
