@@ -727,6 +727,7 @@ void applications_init(void)
     application("Open Tyrian", "opentyrian", "cdt", "opentyrian", 0);
     application("Playstation", "psx", "chd bin", "pcsx_rearmed", 0);
     application("Mario Kart 64", "mk64", "z64 n64 v64", "mk64-go", 0);
+    application("Quake 2", "quake2", "pak", "quake2-go", 0);
 
     if (rg_system_get_stats().freeMemory > 0x100000)
         crc_cache_init();
