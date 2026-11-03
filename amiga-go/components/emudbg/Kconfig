@@ -1,0 +1,18 @@
+menu "Debugger"
+
+    config EMUDBG
+        bool "Debugger for programs in the machine"
+        default y
+        help
+            Breakpoints, single steps, registers and memory of the emulated
+            CPUs over the network, for the VS Code extension (esp32emu-vscode)
+            or anything else that speaks its protocol (esp32emu's
+            docs/debugger.md). Without a client the CPU cores test one
+            pointer per instruction.
+
+    config EMUDBG_PORT
+        int "TCP port"
+        depends on EMUDBG
+        default 6502
+
+endmenu

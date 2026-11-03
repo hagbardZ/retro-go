@@ -1,0 +1,39 @@
+From fc83b86ccac04cdf1f6005f0f8940ba6f7ce9b84 Mon Sep 17 00:00:00 2001
+From: Robert Lucencic <robert.lucencic@gmail.com>
+Date: Tue, 13 Oct 2026 19:33:06 +0200
+Subject: [PATCH 3/3] Double bus/address fault: halt without the MAME $FFFF01
+ read
+
+---
+ m68kcpu.h | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/m68kcpu.h b/m68kcpu.h
+index 40c19db..828bedf 100644
+--- a/m68kcpu.h
++++ b/m68kcpu.h
+@@ -1951,7 +1951,9 @@ static inline void m68ki_exception_bus_error(void)
+ 	 */
+ 	if(CPU_RUN_MODE == RUN_MODE_BERR_AERR_RESET_WSF)
+ 	{
+-		m68k_read_memory_8(0x00ffff01);
++		/* Double fault: halt.  (Upstream also read $FFFF01 here as a MAME
++		 * signal; on a host where that faults it recursed forever.)
++		 */
+ 		CPU_STOPPED = STOP_LEVEL_HALT;
+ 		return;
+ 	}
+@@ -2092,7 +2094,9 @@ static inline void m68ki_exception_address_error(void)
+ 	 */
+ 	if(CPU_RUN_MODE == RUN_MODE_BERR_AERR_RESET_WSF)
+ 	{
+-		m68k_read_memory_8(0x00ffff01);
++		/* Double fault: halt.  (Upstream also read $FFFF01 here as a MAME
++		 * signal; on a host where that faults it recursed forever.)
++		 */
+ 		CPU_STOPPED = STOP_LEVEL_HALT;
+ 		return;
+ 	}
+-- 
+2.54.0 (Apple Git-157)
+

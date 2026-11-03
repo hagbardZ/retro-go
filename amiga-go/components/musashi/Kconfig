@@ -1,0 +1,49 @@
+menu "68000 core (Musashi)"
+
+    choice M68K_CPU
+        prompt "CPU"
+        default M68K_68000
+        help
+            The machine's CPU, fixed at compile time (or chosen at run
+            time, a little slower). The project's sdkconfig.defaults sets it.
+
+        config M68K_68000
+            bool "68000 (Atari ST, compact Macintosh)"
+        config M68K_68020
+            bool "68020 (Macintosh LC and II)"
+        config M68K_68030
+            bool "68030 with its MMU (Macintosh LC II and LC III)"
+        config M68K_RUNTIME
+            bool "68000 to 68020, chosen at run time (Amiga)"
+    endchoice
+
+    config M68K_NO_BUS_ERRORS
+        bool "The machine never raises bus errors"
+        default n
+        help
+            Leaves Musashi's bus errors out: the 68010 and up no longer copy
+            their 16 registers before every instruction (to restart it after
+            a bus error), and each run sets one setjmp() fewer. For machines
+            that never call m68k_bus_error() (the Amiga: empty space reads 0).
+
+    config M68K_PROGRAM_READS
+        bool "Instruction words read through their own callbacks"
+        default n
+        help
+            Musashi's M68K_SEPARATE_READS: opcodes and extension words come
+            through m68k_read_immediate_16/32(), PC-relative operands through
+            m68k_read_pcrelative_8/16/32(), which the machine provides. For
+            machines that tell them apart (the Amiga's 68EC020 instruction
+            cache).
+
+    config M68K_PREFETCH
+        bool "The next instruction word fetched ahead"
+        default n
+        help
+            Musashi's M68K_EMULATE_PREFETCH: each instruction word read also
+            fetches the one after it, as the 68000's prefetch does, so an
+            instruction that writes over the next one runs the old word
+            (Copylock-style checks; the Amiga). A taken branch reads one
+            word more.
+
+endmenu

@@ -1,0 +1,287 @@
+From 4ca0d6f0461b56a234a4e271611db07e87f788be Mon Sep 17 00:00:00 2001
+From: Robert Lucencic <robert.lucencic@gmail.com>
+Date: Tue, 13 Oct 2026 19:07:20 +0200
+Subject: [PATCH 2/3] ESP32/Atari ST: static cycle table, 68000 bus error
+ frame, opcode fetch address error check
+
+---
+ m68k.h     |  6 ++++++
+ m68k_in.c  |  8 +++-----
+ m68kcpu.c  | 28 +++++++++++++++++++++++-----
+ m68kcpu.h  | 31 +++++++++++++++++++++++++++++--
+ m68kmake.c | 43 ++++++++++++++++++++++++++++++-------------
+ 5 files changed, 91 insertions(+), 25 deletions(-)
+
+diff --git a/m68k.h b/m68k.h
+index a826c73..52dee11 100644
+--- a/m68k.h
++++ b/m68k.h
+@@ -356,6 +356,12 @@ void m68k_pulse_halt(void);
+ /* Trigger a bus error exception */
+ void m68k_pulse_bus_error(void);
+ 
++/* Raise a bus error for the access in progress, from inside a memory
++ * callback.  On the 68000 the address and direction go into the group 0
++ * exception stack frame.  Does not return.
++ */
++void m68k_bus_error(unsigned int address, int write);
++
+ 
+ /* Context switching to allow multiple CPUs */
+ 
+diff --git a/m68k_in.c b/m68k_in.c
+index 760c9e5..feb0662 100644
+--- a/m68k_in.c
++++ b/m68k_in.c
+@@ -123,10 +123,8 @@ static inline void m68ki_build_opcode_table(void) {}
+ extern void (*const m68ki_static_instruction_jump_table[0x10000])(void);
+ 
+ #if M68K_CYCLE_COUNTING
+-/* To support cycle counting in a static-tables scenario, extend
+- * m68kmake to generate a static table.
+- */
+-#error "CYCLE_COUNTING is only supported with DYNAMIC_INSTR_TABLES"
++/* Cycle counts per CPU type, generated at build time by m68kmake */
++extern const unsigned char m68ki_static_cycles[][0x10000];
+ #endif
+ #endif
+ 
+@@ -181,7 +179,7 @@ M68KMAKE_TABLE_FOOTER
+ };
+ 
+ #if M68K_CYCLE_COUNTING
+-#define SET_CPU_CYCLECOUNT(a, b, val)   do { m68ki_cycles[k][i] = (val); } while(0)
++#define SET_CPU_CYCLECOUNT(a, b, val)   do { m68ki_cycles[a][b] = (val); } while(0)
+ #else
+ #define SET_CPU_CYCLECOUNT(a, b, val)   do { } while(0)
+ #endif
+diff --git a/m68kcpu.c b/m68kcpu.c
+index a52d2df..42828a9 100644
+--- a/m68kcpu.c
++++ b/m68kcpu.c
+@@ -60,6 +60,10 @@ extern unsigned char m68ki_cycles[][0x10000];
+ #else
+ extern void (*const m68ki_static_instruction_jump_table[0x10000])(void);
+ void (**instruction_jump_table)(void) = (void (**)(void))m68ki_static_instruction_jump_table;
++#if M68K_CYCLE_COUNTING
++extern const unsigned char m68ki_static_cycles[][0x10000];
++#define m68ki_cycles m68ki_static_cycles
++#endif
+ #endif
+ 
+ /* ======================================================================== */
+@@ -793,10 +797,9 @@ void m68k_set_instr_hook_callback(void  (*callback)(unsigned int pc))
+ 	CALLBACK_INSTR_HOOK = callback ? callback : default_instr_hook_callback;
+ }
+ 
+-#if M68K_DYNAMIC_INSTR_TABLES && M68K_CYCLE_COUNTING
++#if M68K_CYCLE_COUNTING
+ #define CYC_INSTR_INIT(x)       m68ki_cpu.cyc_instruction = (x)
+ #else
+-/* FIXME: how to select a CPU flavour at compile time is TBD. */
+ #define CYC_INSTR_INIT(x)       m68ki_cpu.cyc_instruction = NULL
+ #endif
+ 
+@@ -1018,9 +1021,14 @@ int M68K_FAST_FUNC(m68k_execute)(int num_cycles)
+ 			REG_PPC = REG_PC;
+ 
+ #if M68K_BUS_ERR_ENABLE
+-			/* Record previous D/A register state (in case of bus error) */
+-			for (int i = 15; i >= 0; i--){
+-				REG_DA_SAVE[i] = REG_DA[i];
++			/* Record previous D/A register state (in case of bus error).
++			 * The 68000 does not restore registers, so it needs no copy.
++			 */
++			if(!CPU_TYPE_IS_000(CPU_TYPE))
++			{
++				for (int i = 15; i >= 0; i--){
++					REG_DA_SAVE[i] = REG_DA[i];
++				}
+ 			}
+ #endif
+ 			/* Read an instruction and call its handler */
+@@ -1136,6 +1144,16 @@ void m68k_pulse_bus_error(void)
+ #endif
+ }
+ 
++void m68k_bus_error(unsigned int address, int write)
++{
++#if M68K_BUS_ERR_ENABLE
++	m68ki_aerr_address = ADDRESS_68K(address);
++	m68ki_aerr_write_mode = write ? MODE_WRITE : MODE_READ;
++	m68ki_aerr_fc = FLAG_S | FUNCTION_CODE_USER_DATA;
++	m68ki_exception_bus_error();
++#endif
++}
++
+ /* Pulse the RESET line on the CPU */
+ void m68k_pulse_reset(void)
+ {
+diff --git a/m68kcpu.h b/m68kcpu.h
+index 8cba02d..40c19db 100644
+--- a/m68kcpu.h
++++ b/m68kcpu.h
+@@ -374,7 +374,7 @@ typedef uint32 uint64;
+ #define CPU_INSTR_MODE   m68ki_cpu.instr_mode
+ #define CPU_RUN_MODE     m68ki_cpu.run_mode
+ 
+-#if M68K_DYNAMIC_INSTR_TABLES && M68K_CYCLE_COUNTING
++#if M68K_CYCLE_COUNTING
+ #define CYC_INSTRUCTION(x)      m68ki_cpu.cyc_instruction[x]
+ #else
+ #define CYC_INSTRUCTION(x)      (8)
+@@ -477,6 +477,11 @@ typedef uint32 uint64;
+ #define m68k_read_pcrelative_32(A) m68ki_read_program_32(A)
+ #endif /* M68K_SEPARATE_READS */
+ 
++/* Opcode fetch; a host may map this to a faster aligned-only path */
++#ifndef m68k_read_instr_16
++#define m68k_read_instr_16(A) m68k_read_immediate_16(A)
++#endif
++
+ 
+ /* Enable or disable callback functions */
+ #if M68K_EMULATE_INT_ACK
+@@ -1089,7 +1094,8 @@ static inline uint m68ki_read_imm_16(void)
+ /* Read an opcode.  Properties:  always aligned! */
+ static inline uint m68ki_read_opcode_16(void)
+ {
+-	/* FIXME: fc, check addr err, check PMMU, etc. */
++	/* FIXME: fc, check PMMU, etc. */
++	m68ki_check_address_error(REG_PC, MODE_READ, FLAG_S | FUNCTION_CODE_USER_PROGRAM); /* auto-disable (see m68kcpu.h) */
+ 	REG_PC += 2;
+ 	return m68k_read_instr_16(ADDRESS_68K(REG_PC-2));
+ }
+@@ -1951,6 +1957,27 @@ static inline void m68ki_exception_bus_error(void)
+ 	}
+ 	CPU_RUN_MODE = RUN_MODE_BERR_AERR_RESET_WSF;
+ 
++	if(CPU_TYPE_IS_000(CPU_TYPE))
++	{
++		/* 68000: 7 word group 0 frame, same as address error.  Registers
++		 * keep whatever the aborted instruction left in them.
++		 */
++		uint sr = m68ki_init_exception();
++
++		m68ki_stack_frame_buserr(sr);
++
++		m68ki_jump_vector(EXCEPTION_BUS_ERROR);
++
++		CPU_RUN_MODE = RUN_MODE_BERR_AERR_RESET;
++
++		/* We longjmp out of the instruction handler before the execute
++		 * loop deducts its cycles, so only the exception cost applies.
++		 */
++		USE_CYCLES(CYC_EXCEPTION[EXCEPTION_BUS_ERROR]);
++
++		longjmp(m68ki_bus_error_jmp_buf, 1);
++	}
++
+ 	/* Use up some clock cycles and undo the instruction's cycles */
+ 	USE_CYCLES(CYC_EXCEPTION[EXCEPTION_BUS_ERROR] - CYC_INSTRUCTION(REG_IR));
+ 
+diff --git a/m68kmake.c b/m68kmake.c
+index 039ce36..f5b34c8 100644
+--- a/m68kmake.c
++++ b/m68kmake.c
+@@ -1221,8 +1221,7 @@ void build_opcode_jump_table(FILE *outfile, const opcode_struct *opcode_table, i
+ 	/* One entry per opcode/instruction.  After allocating valid entries,
+ 	 * anything remaining zero is implicitly the illegal instr handler.
+ 	 */
+-	const char **handler_names = calloc(0x10000, sizeof(char *));
+-	/* FIXME: Support cycle table -- for one CPU type? */
++	const opcode_struct **handlers = calloc(0x10000, sizeof(opcode_struct *));
+ 
+ 	for (int opc = 0; opc < opcode_table_len; opc++) {
+ 		const opcode_struct *ostruct = &opcode_table[opc];
+@@ -1237,7 +1236,7 @@ void build_opcode_jump_table(FILE *outfile, const opcode_struct *opcode_table, i
+ 			{
+ 				if((i & ostruct->op_mask) == ostruct->op_match)
+ 				{
+-					handler_names[i] = ostruct->name;
++					handlers[i] = ostruct;
+ 				}
+ 			}
+ 			break;
+@@ -1245,7 +1244,7 @@ void build_opcode_jump_table(FILE *outfile, const opcode_struct *opcode_table, i
+ 		case 0xff00:
+ 			for(i = 0;i <= 0xff;i++)
+ 			{
+-				handler_names[ostruct->op_match | i] = ostruct->name;
++				handlers[ostruct->op_match | i] = ostruct;
+ 			}
+ 			break;
+ 		case 0xf1f8:
+@@ -1254,30 +1253,30 @@ void build_opcode_jump_table(FILE *outfile, const opcode_struct *opcode_table, i
+ 				for(j = 0;j < 8;j++)
+ 				{
+ 					instr = ostruct->op_match | (i << 9) | j;
+-					handler_names[instr] = ostruct->name;
++					handlers[instr] = ostruct;
+ 				}
+ 			}
+ 			break;
+ 		case 0xfff0:
+ 			for(i = 0;i <= 0x0f;i++)
+ 			{
+-				handler_names[ostruct->op_match | i] = ostruct->name;
++				handlers[ostruct->op_match | i] = ostruct;
+ 			}
+ 			break;
+ 		case 0xf1ff:
+ 			for(i = 0;i <= 0x07;i++)
+ 			{
+-				handler_names[ostruct->op_match | (i << 9)] = ostruct->name;
++				handlers[ostruct->op_match | (i << 9)] = ostruct;
+ 			}
+ 			break;
+ 		case 0xfff8:
+ 			for(i = 0;i <= 0x07;i++)
+ 			{
+-				handler_names[ostruct->op_match | i] = ostruct->name;
++				handlers[ostruct->op_match | i] = ostruct;
+ 			}
+ 			break;
+ 		case 0xffff:
+-			handler_names[ostruct->op_match] = ostruct->name;
++			handlers[ostruct->op_match] = ostruct;
+ 		}
+ 	}
+ 
+@@ -1285,11 +1284,29 @@ void build_opcode_jump_table(FILE *outfile, const opcode_struct *opcode_table, i
+ 	fprintf(outfile, "#if !M68K_DYNAMIC_INSTR_TABLES\n");
+ 	fprintf(outfile, "void (*const m68ki_static_instruction_jump_table[0x10000])(void) = {\n");
+ 	for (i = 0; i < 0x10000; i++) {
+-		fprintf(outfile, "\t%s,\n", handler_names[i] ?
+-			handler_names[i] : "	m68k_op_illegal");
++		fprintf(outfile, "\t%s,\n", handlers[i] ?
++			handlers[i]->name : "	m68k_op_illegal");
+ 	}
+-	fprintf(outfile, "};\n#endif\n");
+-	free(handler_names);
++	fprintf(outfile, "};\n");
++
++	/* Cycle counts per CPU type, as m68ki_build_opcode_table would fill
++	 * m68ki_cycles (illegal opcodes count 0):
++	 */
++	fprintf(outfile, "\n#if M68K_CYCLE_COUNTING\n");
++	fprintf(outfile, "const unsigned char m68ki_static_cycles[NUM_CPU_TYPES][0x10000] = {\n");
++	for (k = 0; k < NUM_CPUS; k++) {
++		fprintf(outfile, "\t{\n");
++		for (i = 0; i < 0x10000; i++) {
++			if ((i & 15) == 0)
++				fprintf(outfile, "\t\t");
++			fprintf(outfile, "%3d,", handlers[i] ? handlers[i]->cycles[k] : 0);
++			if ((i & 15) == 15)
++				fprintf(outfile, "\n");
++		}
++		fprintf(outfile, "\t},\n");
++	}
++	fprintf(outfile, "};\n#endif\n#endif\n");
++	free(handlers);
+ }
+ 
+ 
+-- 
+2.54.0 (Apple Git-157)
+

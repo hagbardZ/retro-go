@@ -1,0 +1,41 @@
+From 560f39a7940cf1d3ca8531cd7e7206b02a22cfa9 Mon Sep 17 00:00:00 2001
+From: Paul-Arnold <paul@paul-arnold.co.uk>
+Date: Sun, 25 Feb 2024 19:40:10 +0000
+Subject: [PATCH 1/3] Correct reported cycle count
+
+Number of cycles reported by m68k_execute() was incorrect if  m68k_modify_timeslice() was used
+
+(cherry picked from commit b2425b56bc86281f34b103ebb1bf393db55c581e)
+---
+ m68kcpu.c | 8 ++------
+ 1 file changed, 2 insertions(+), 6 deletions(-)
+
+diff --git a/m68kcpu.c b/m68kcpu.c
+index fac648f..a52d2df 100644
+--- a/m68kcpu.c
++++ b/m68kcpu.c
+@@ -1039,11 +1039,7 @@ int M68K_FAST_FUNC(m68k_execute)(int num_cycles)
+ 		SET_CYCLES(0);
+ 
+ 	/* return how many clocks we used */
+-	if (num_cycles == m68ki_initial_cycles)
+-		return m68ki_initial_cycles - GET_CYCLES();
+-
+-	/* modified by end_timeslice. */
+-	return num_cycles - m68ki_initial_cycles;
++	return m68ki_initial_cycles - GET_CYCLES();
+ }
+ 
+ 
+@@ -1067,7 +1063,7 @@ void m68k_modify_timeslice(int cycles)
+ 
+ void m68k_end_timeslice(void)
+ {
+-	m68ki_initial_cycles = GET_CYCLES();
++	m68ki_initial_cycles -= GET_CYCLES();
+ 	SET_CYCLES(0);
+ }
+ 
+-- 
+2.54.0 (Apple Git-157)
+
