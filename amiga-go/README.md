@@ -43,12 +43,25 @@ The full image with launcher + amiga-go is written to
   both get movement.
 - Keyboard-ish keys: START -> Return, SELECT -> Space.
 
+## Audio
+
+- The Amiga core outputs stereo; on the Martendo32 (single speaker) `RG_AUDIO_MONO_OUT`
+  mixes it to mono so both channels are audible.
+
 ## Known limitations
 
 - No save states.
 - PAL only for now (NTSC not implemented in this port yet).
 - Output is a 320x240 downscale of the Amiga picture (720x568 hires PAL -> 320x240).
 - Audio: 44100 Hz stereo Paula output.
+
+## Performance
+
+Measured on the Martendo32 IPS-HDMI while playing Shadow of the Beast III
+(system stats while playing):
+
+- FPS: 42-62 (busy: 77-99%)
+- PAL target: 50 Hz
 
 ## Status
 

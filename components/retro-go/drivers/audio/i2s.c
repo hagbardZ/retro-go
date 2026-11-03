@@ -175,6 +175,14 @@ static bool driver_submit(const rg_audio_frame_t *frames, size_t count)
         // if (left > 32767) left = 32767; else if (left < -32768) left = -32767;
         // if (right > 32767) right = 32767; else if (right < -32768) right = -32767;
 
+        #if defined(RG_AUDIO_MONO_OUT)
+        if (state.device == 1) {
+            int mono = (left + right) >> 1;
+            left = mono;
+            right = mono;
+        }
+        #endif
+
         // Queue
         buffer[pos].left = left;
         buffer[pos].right = right;

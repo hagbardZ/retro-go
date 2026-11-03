@@ -8,6 +8,10 @@ python rg_tool.py --target martendo32 build-img launcher snes9x retro-core gwene
 python rg_tool.py --target martendo32 release launcher snes9x retro-core gwenesis sm64-go --no-networking
 Flash size: 15.688 MB
 
+## Audio
+- `RG_AUDIO_MONO_OUT` is enabled for the Martendo32 (single speaker): the Amiga
+  stereo output is mixed to mono.
+
 ## Hardware
 - Martendo32
 - Wireless-Tag ESP32-P4 WT0132P4-A1-N16R32
