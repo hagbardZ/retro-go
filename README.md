@@ -14,12 +14,12 @@ The project consists of a launcher and half a dozen applications that have been 
 optimized to reduce their cpu, memory, and flash needs without reducing compatibility!
 
 ### Supported systems:
-- Nintendo: **NES, SNES (slow), Gameboy, Gameboy Color, Game & Watch**
+- Nintendo: **NES, SNES (slow), Gameboy, Gameboy Color, Game & Watch**, **Gameboy Advance**
 - Sega: **SG-1000, Master System, Mega Drive / Genesis, Game Gear**
 - Coleco: **Colecovision**
 - NEC: **PC Engine**
-- Atari: **Lynx**
-- Others: **DOOM** (including mods!)
+- Atari: **Lynx**, **Atari 2600**
+- Others: **DOOM** (including mods!), **Commodore 64**, **Commodore Amiga**, **Duke Nukem 3D**, **Quake**, **MSX**, **Tomb Raider**, **Super Mario 64**, **Outrun**, **Classicube**, **Open Tyrian**, **Playstation**, **Mario Kart 64**, **Quake 2**, **MP3 Player**, **Celeste**
 
 ### Retro-Go features:
 - In-game menu
