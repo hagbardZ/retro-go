@@ -5,10 +5,10 @@ Amiga emulator port for Retro-Go, based on the platform-independent core of
 
 ## Screenshots
 
-![Amiga Go - 1](1.jpg)
-![Amiga Go - 2](2.jpg)
-![Amiga Go - 3](3.jpg)
-![Amiga Go - 4](4.jpg)
+<img src="1.jpg" width="400" alt="Amiga Go - 1">
+<img src="2.jpg" width="400" alt="Amiga Go - 2">
+<img src="3.jpg" width="400" alt="Amiga Go - 3">
+<img src="4.jpg" width="400" alt="Amiga Go - 4">
 
 ## Sources
 
