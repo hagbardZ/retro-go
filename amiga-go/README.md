@@ -3,6 +3,13 @@
 Amiga emulator port for Retro-Go, based on the platform-independent core of
 [rlucencic/esp32ami](https://github.com/rlucencic/esp32ami) (MIT).
 
+## Screenshots
+
+![Amiga Go - 1](1.jpg)
+![Amiga Go - 2](2.jpg)
+![Amiga Go - 3](3.jpg)
+![Amiga Go - 4](4.jpg)
+
 ## Sources
 
 - Core: `components/amiga/` (vendored into this project as `amiga-go/components/amiga/`)
