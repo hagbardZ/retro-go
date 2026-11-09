@@ -104,6 +104,29 @@
  * Input                                                                    *
  ****************************************************************************/
 // Refer to rg_input.h to see all available RG_KEY_* and RG_GAMEPAD_*_MAP types
+// D-Pad source selector: 1 = Adafruit 2765 analog thumbstick (ADC), 0 = d-pad buttons (GPIO)
+#ifndef RG_GAMEPAD_DPAD_SOURCE_STICK
+#define RG_GAMEPAD_DPAD_SOURCE_STICK   1
+#endif
+
+#if defined(RG_GAMEPAD_DPAD_SOURCE_STICK) && RG_GAMEPAD_DPAD_SOURCE_STICK
+#define RG_GAMEPAD_ADC_MAP {\
+    {RG_KEY_UP,    ADC_UNIT_2, ADC_CHANNEL_4, ADC_ATTEN_DB_12, 0, 1024},\
+    {RG_KEY_RIGHT, ADC_UNIT_2, ADC_CHANNEL_3, ADC_ATTEN_DB_12, 3072, 4095},\
+    {RG_KEY_DOWN,  ADC_UNIT_2, ADC_CHANNEL_4, ADC_ATTEN_DB_12, 3072, 4095},\
+    {RG_KEY_LEFT,  ADC_UNIT_2, ADC_CHANNEL_3, ADC_ATTEN_DB_12, 0, 1024},\
+}
+#define RG_GAMEPAD_GPIO_MAP {\
+    {RG_KEY_START,  .num = GPIO_NUM_46, .pullup = 1, .level = 0},\
+    {RG_KEY_SELECT, .num = GPIO_NUM_45, .pullup = 1, .level = 0},\
+    {RG_KEY_A,      .num = GPIO_NUM_26, .pullup = 1, .level = 0},\
+    {RG_KEY_B,      .num = GPIO_NUM_27, .pullup = 1, .level = 0},\
+    {RG_KEY_X,      .num = GPIO_NUM_13, .pullup = 1, .level = 0},\
+    {RG_KEY_Y,      .num = GPIO_NUM_12, .pullup = 1, .level = 0},\
+    {RG_KEY_L,      .num = GPIO_NUM_11, .pullup = 1, .level = 0},\
+    {RG_KEY_R,      .num = GPIO_NUM_14, .pullup = 1, .level = 0},\
+}
+#else
 #define RG_GAMEPAD_GPIO_MAP {\
     {RG_KEY_LEFT,   .num = GPIO_NUM_4,  .pullup = 1, .level = 0},\
     {RG_KEY_RIGHT,  .num = GPIO_NUM_2,  .pullup = 1, .level = 0},\
@@ -118,6 +141,7 @@
     {RG_KEY_L,      .num = GPIO_NUM_11, .pullup = 1, .level = 0},\
     {RG_KEY_R,      .num = GPIO_NUM_14, .pullup = 1, .level = 0},\
 }
+#endif
 #define RG_GAMEPAD_VIRT_MAP {\
     {RG_KEY_MENU,   .src = RG_KEY_START | RG_KEY_SELECT},\
     {RG_KEY_OPTION, .src = RG_KEY_START | RG_KEY_A},\

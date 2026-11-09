@@ -23,6 +23,17 @@ Flash size: 15.688 MB
 - USB-C for charging and firmware updates
 
 
+## Input
+- The directional pad (Up/Down/Left/Right) is driven by an Adafruit 2765
+  Mini 2-Axis Analog Thumbstick over the ADC (`RG_GAMEPAD_ADC_MAP`), wired
+  X = GPIO52 and Y = GPIO53 (potentiometers between +3V3 and GND).
+  The up/down/left/right buttons are therefore not used.
+
+- The d-pad source can be selected with `RG_GAMEPAD_DPAD_SOURCE_STICK`
+  (1 = Adafruit 2765 analog thumbstick over ADC, default; 0 = d-pad buttons
+  over GPIO).
+
+
 ## Images
 <img width="1718" height="1050" alt="Martendo32" src="https://github.com/user-attachments/assets/e1ad5767-983e-4a02-aa00-4a6fad012994" />
 
